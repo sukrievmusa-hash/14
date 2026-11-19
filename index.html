@@ -37,6 +37,7 @@
   </div>
   <div id="right">
     <div id="online">…</div>
+    <div id="room-hud" class="hidden"><div id="room-info"></div><button id="room-invite">📤 Позвать</button></div>
     <div class="rrow">
       <div id="lb"></div>
       <canvas id="minimap"></canvas>
@@ -70,9 +71,16 @@
     <div class="modes">
       <button class="mode" data-m="grow">🔧 <b>Апгрейд</b><small>С прототипа до ПРАЙМА</small></button>
       <button class="mode" data-m="prime">⚔️ <b>Прайм-арена</b><small>Все на максимуме</small></button>
+      <button class="mode" data-m="room">👥 <b>Комната</b><small>Только живые игроки</small></button>
+    </div>
+    <div id="room-box" class="hidden">
+      <span>Код комнаты</span>
+      <input id="room-code" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      <button id="room-new" title="Новый код">🎲</button>
+      <button id="room-share">📤 Позвать друзей</button>
     </div>
     <button id="play">В БОЙ</button>
-    <p class="tiny">Без регистрации. Если никого нет онлайн, будут боты.</p>
+    <p class="tiny" id="menu-note">Без регистрации. Если никого нет онлайн, будут боты.</p>
   </div>
 </div>
 

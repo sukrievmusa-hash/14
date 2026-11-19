@@ -37,7 +37,8 @@ addEventListener('resize', onResize); onResize();
 const clientId = Math.random().toString(36).slice(2, 10);
 const ents = new Map();          // id -> Mech
 const peers = new Map();         // peerId -> { c: clientId, t: время }
-let me = null, net = null, mode = null, netStatus = 'off', netStart = 0;
+let me = null, net = null, mode = null, netKey = '', roomCode = '', netStatus = 'off', netStart = 0, connFails = 0;
+const isPrime = () => mode !== 'grow'; // в Прайм-арене и в Комнате все сразу на максимуме
 let life = 0, botN = 0, botTimer = 0, sendTimer = 0, hudTimer = 0, mapTimer = 0;
 let camYaw = 0, camPitch = 0.34, shake = 0, playing = false, lastCamInput = 0;
 let lifeStats = { start: 0, kills: 0, best: 0 };
@@ -663,6 +664,7 @@ const handlers = {
       if (!e) {
         e = new Mech(id, sp, String(name).slice(0, 16), { x, z, rot, g });
         e.bot = (flags & 8) !== 0;
+        if (!e.bot && playing) feed(`👋 ${e.name} в игре`);
         ents.set(id, e);
       }
       e.peer = peerId; e.lastSeen = NOW();
@@ -693,8 +695,10 @@ const handlers = {
     if (e && e.local) return; // своих хороним сами
     onKill({ id: d.id, b: String(d.b), x: +d.x || 0, z: +d.z || 0, s: +d.s || 1, n: String(d.n).slice(0, 16), bn: String(d.bn).slice(0, 16) });
   },
+  onConnFail() { connFails++; },
   onLeave(peerId) {
     peers.delete(peerId);
+    for (const e of ents.values()) if (!e.local && !e.bot && e.peer === peerId && playing) feed(`🚪 ${e.name} вышел`);
     for (const e of ents.values()) if (!e.local && e.peer === peerId) { ents.delete(e.id); e.dispose(); }
   },
 };
@@ -706,15 +710,15 @@ function isHost() {
   return h === clientId;
 }
 
-async function startNet(m) {
-  if (net && mode === m) return;
+async function startNet(m, code = '') {
+  const key = m === 'room' ? 'room-' + code : m;
+  if (net && netKey === key) return;
   if (net) { net.leave(); net = null; }
   for (const e of [...ents.values()]) if (e !== me) { ents.delete(e.id); e.dispose(); }
-  peers.clear(); mode = m; netStatus = 'connecting'; netStart = NOW();
-  const want = m;
+  peers.clear(); mode = m; netKey = key; roomCode = m === 'room' ? code : ''; netStatus = 'connecting'; netStart = NOW(); connFails = 0;
   let n = null;
-  try { n = await connect(m, handlers); } catch (e) { console.warn(e); }
-  if (mode !== want) { n && n.leave(); return; }
+  try { n = await connect(key, handlers); } catch (e) { console.warn(e); }
+  if (netKey !== key) { n && n.leave(); return; }
   net = n; netStatus = n ? 'online' : 'offline';
 }
 
@@ -744,7 +748,7 @@ function spawnPoint() {
 function spawnMe(sp, name) {
   const [x, z] = spawnPoint();
   life++;
-  me = new Mech(`${clientId}-${life}`, sp, name, { local: true, self: true, x, z, rot: Math.random() * 6, g: mode === 'prime' ? 1 : 0 });
+  me = new Mech(`${clientId}-${life}`, sp, name, { local: true, self: true, x, z, rot: Math.random() * 6, g: isPrime() ? 1 : 0 });
   ents.set(me.id, me);
   camYaw = me.rot; playing = true;
   lifeStats = { start: NOW(), kills: 0, best: stageIndex(me.g) };
@@ -754,7 +758,7 @@ function spawnMe(sp, name) {
 function spawnBot(force) {
   const sp = force || SP_KEYS[Math.floor(Math.random() * SP_KEYS.length)];
   const [x, z] = spawnPoint();
-  const g = mode === 'prime' ? 1 : 0.15 + Math.random() * 0.75;
+  const g = isPrime() ? 1 : 0.15 + Math.random() * 0.75;
   const used = new Set([...ents.values()].map(e => e.name));
   const free = BOT_NAMES.filter(n => !used.has(n + ' (бот)'));
   const list = free.length ? free : BOT_NAMES;
@@ -1001,6 +1005,7 @@ function botAI(b, dt) {
 }
 
 function manageBots(dt) {
+  if (mode === 'room') { for (const e of [...ents.values()]) if (e.bot && e.local) { ents.delete(e.id); e.dispose(); } return; } // в комнате только люди
   const host = netStatus === 'offline' || (netStatus === 'online' && NOW() - netStart > 3000 && isHost());
   const mine = [...ents.values()].filter(e => e.bot && e.local);
   if (!host) { for (const b of mine) { ents.delete(b.id); b.dispose(); } return; }
@@ -1191,8 +1196,19 @@ function feed(t) {
 function flashVignette() { const v = $('vignette'); v.classList.remove('hit'); void v.offsetWidth; v.classList.add('hit'); }
 
 function updateHud() {
-  const st = netStatus === 'online' ? `🟢 ${1 + activePeers()} онлайн` : netStatus === 'connecting' ? '🟡 Подключение…' : '🔴 Оффлайн, только боты';
-  $('online').textContent = st + (mode === 'prime' ? ' · Прайм-арена' : ' · Апгрейд');
+  const room = mode === 'room';
+  const st = netStatus === 'online' ? `🟢 ${1 + activePeers()} онлайн` : netStatus === 'connecting' ? '🟡 Подключение…' : room ? '🔴 Нет связи' : '🔴 Оффлайн, только боты';
+  $('online').textContent = st + (room ? ' · Комната' : mode === 'prime' ? ' · Прайм-арена' : ' · Апгрейд');
+  $('room-hud').classList.toggle('hidden', !room);
+  if (room) {
+    const n = 1 + activePeers(), [ok, all] = net && net.relays ? net.relays() : [0, 0];
+    let html = `Код <b>${esc(roomCode)}</b> · ${n} ${n === 1 ? 'игрок' : n < 5 ? 'игрока' : 'игроков'}`;
+    if (netStatus === 'offline') html += '<br><span class="warn">Не загрузилась сетевая библиотека. Проверь интернет.</span>';
+    else if (netStatus === 'online' && all > 0 && !ok && NOW() - netStart > 6000) html += '<br><span class="warn">Нет связи с серверами знакомств (сеть их блокирует?)</span>';
+    else if (n === 1 && connFails) html += '<br><span class="warn">Игрок нашёлся, но сеть не пустила соединение. Попробуйте другой интернет (Wi-Fi ↔ мобильный).</span>';
+    else if (n === 1) html += '<br>Ждём друзей… Нажми «Позвать» и отправь ссылку' + (all ? ` · связь ${ok}/${all}` : '');
+    $('room-info').innerHTML = html;
+  }
   const top = innerHeight < 500 ? 3 : 5;
   const list = [...ents.values()].filter(e => !e.dead).sort((a, b) => b.kills - a.kills || b.g - a.g).slice(0, top);
   $('lb').innerHTML = list.map((e, i) => `<div class="${e === me ? 'me' : ''}">${i + 1}. ${esc(e.name)} <span>${STAGES[stageIndex(e.g)]} · ⚙️${e.kills}</span></div>`).join('');
@@ -1209,7 +1225,7 @@ function updateHud() {
   $('b-ult').style.setProperty('--cd', Math.max(0, me.ultCd / me.S.ult.cd));
   $('b-ult').classList.toggle('ready', me.ultCd <= 0);
   if ($('atk-name').textContent !== mv.name) $('atk-name').textContent = mv.name;
-  $('food-hint').textContent = mode === 'prime' ? (me.S.diet === 'carn' ? '🔩 Металлолом чинит броню' : '💎 Кристаллы чинят броню')
+  $('food-hint').textContent = isPrime() ? (me.S.diet === 'carn' ? '🔩 Металлолом чинит броню' : '💎 Кристаллы чинят броню')
     : me.S.diet === 'carn' ? '🔩 Собирай металлолом и побеждай' : '💎 Собирай энергокристаллы';
 }
 
@@ -1252,16 +1268,40 @@ function renderCards() {
     <div class="tr"><b>↩️ Враг сзади:</b> ${S.rear.map(m => m.name).join(', ')}</div>
     <div class="tr"><b style="color:${S.glow}">✨ ${S.special.name}:</b> ${S.special.info}</div>
     <div class="tr"><b style="color:${S.glow}">🌀 ${S.ult.name}:</b> ${S.ult.info}</div>
-    <div class="tr"><b>🛡 ${S.passive.name}:</b> ${S.passive.info}</div>
+    <div class="tr pa"><b>🛡 ${S.passive.name}:</b> ${S.passive.info}</div>
     <div class="tr ai"><b>🧠 Стиль:</b> ${S.aiInfo}</div>`;
   document.querySelectorAll('.card').forEach(b => b.onclick = () => { chosen = b.dataset.k; renderCards(); });
   document.querySelectorAll('.mode').forEach(b => {
     b.classList.toggle('sel', b.dataset.m === chosenMode);
     b.onclick = () => { chosenMode = b.dataset.m; renderCards(); };
   });
+  $('room-box').classList.toggle('hidden', chosenMode !== 'room');
+  document.body.classList.toggle('room-sel', chosenMode === 'room');
+  if (chosenMode === 'room' && !$('room-code').value) $('room-code').value = newCode();
+  $('menu-note').textContent = chosenMode === 'room' ? 'В комнате только живые игроки, все на максимуме. Отправь ссылку друзьям — кто откроет, попадёт к тебе.'
+    : 'Без регистрации. Если никого нет онлайн, будут боты.';
   setPreview(chosen);
 }
 renderCards();
+
+// ----- Комната: код и приглашение -----
+function newCode() { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let c = ''; for (let i = 0; i < 4; i++) c += A[Math.floor(Math.random() * A.length)]; return c; }
+const cleanCode = v => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+function inviteLink(code) { return location.origin + location.pathname + '?room=' + code; }
+async function invite(code) {
+  const url = inviteLink(code), text = `Го в МЕХАЗАВРЫ! Моя комната ${code}`;
+  try { if (navigator.share) { await navigator.share({ title: 'МЕХАЗАВРЫ', text, url }); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(url); toast('Ссылка скопирована — отправь другу'); return; } catch (e) { /* нет доступа к буферу */ }
+  window.prompt('Скопируй ссылку и отправь другу:', url);
+}
+$('room-code').addEventListener('input', e => { const c = cleanCode(e.target.value); if (e.target.value !== c) e.target.value = c; });
+$('room-new').onclick = () => { $('room-code').value = newCode(); };
+$('room-share').onclick = () => { if (cleanCode($('room-code').value).length < 3) $('room-code').value = newCode(); invite(cleanCode($('room-code').value)); };
+$('room-invite').addEventListener('pointerdown', e => { e.stopPropagation(); if (roomCode) invite(roomCode); });
+{ // пришёл по ссылке-приглашению
+  const c = cleanCode(new URLSearchParams(location.search).get('room'));
+  if (c.length >= 3) { chosenMode = 'room'; $('room-code').value = c; renderCards(); setTimeout(() => toast(`Тебя позвали в комнату ${c}`), 600); }
+}
 
 function startGame() {
   initAudio();
@@ -1271,11 +1311,14 @@ function startGame() {
   localStorage.setItem('mech_nick', name); localStorage.setItem('mech_sp', chosen); localStorage.setItem('mech_mode', chosenMode);
   $('menu').classList.add('hidden'); $('death').classList.add('hidden'); $('hud').classList.remove('hidden');
   document.body.classList.add('playing');
-  if (mode !== chosenMode || !net) startNet(chosenMode);
+  let code = '';
+  if (chosenMode === 'room') { code = cleanCode($('room-code').value); if (code.length < 3) { code = newCode(); $('room-code').value = code; } }
+  const key = chosenMode === 'room' ? 'room-' + code : chosenMode;
+  if (netKey !== key || !net) startNet(chosenMode, code);
   if (me) { ents.delete(me.id); me.dispose(); me = null; }
   spawnMe(chosen, name);
   $('sp-name').textContent = SPECIES[chosen].special.name; $('ult-name').textContent = SPECIES[chosen].ult.name;
-  toast(chosenMode === 'prime' ? 'Прайм-арена: все на максимуме. В бой!' : 'Собирай ресурсы и прокачайся до ПРАЙМА!');
+  toast(chosenMode === 'room' ? `Комната ${code}: только живые игроки` : chosenMode === 'prime' ? 'Прайм-арена: все на максимуме. В бой!' : 'Собирай ресурсы и прокачайся до ПРАЙМА!');
 }
 $('play').onclick = startGame;
 function showDeath(by) {

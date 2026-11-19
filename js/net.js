@@ -16,7 +16,9 @@ export async function connect(roomName, h) {
   hit.onMessage((d, ctx) => h.onHit(d, ctx.peerId));
   kill.onMessage((d, ctx) => h.onKill(d, ctx.peerId));
   room.onPeerLeave(({ peerId }) => h.onLeave && h.onLeave(peerId));
-  if (room.onError) room.onError(e => console.warn('room error', e));
+  if (room.onPeerJoin) room.onPeerJoin(({ peerId }) => h.onJoin && h.onJoin(peerId));
+  // игрок нашёлся через сервер знакомств, но сеть не пустила прямое соединение
+  if (room.onError) room.onError(e => { console.warn('room error', e); if (e && e.code === 'peer-connect-failed') h.onConnFail && h.onConnFail(e.peerId); });
 
   const safe = fn => { try { const p = fn(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* нет соединения */ } };
   return {
@@ -25,5 +27,9 @@ export async function connect(roomName, h) {
     hit: (peer, d) => safe(() => hit.send(d, { target: peer })),
     kill: d => safe(() => kill.send(d)),
     leave: () => safe(() => room.leave()),
+    // сколько серверов знакомств (Nostr-реле) сейчас на связи
+    relays: () => {
+      try { const r = lib.getRelaySockets ? Object.values(lib.getRelaySockets()) : []; return [r.filter(w => w.readyState === 1).length, r.length]; } catch (e) { return [0, 0]; }
+    },
   };
 }
