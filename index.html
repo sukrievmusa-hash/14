@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#a9d9f2">
+<title>Dino Арена — онлайн 3D игра про динозавров</title>
+<meta name="description" content="Онлайн 3D игра про динозавров прямо в браузере: выбери динозавра, расти до прайма и сражайся с другими игроками.">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="touch"></div>
+<div id="vignette"></div>
+
+<!-- Игровой интерфейс -->
+<div id="hud" class="hidden">
+  <div id="bars">
+    <div id="stage">—</div>
+    <div class="bar hp"><div id="hp-fill"></div><span id="hp-txt"></span></div>
+    <div class="bar st"><div id="st-fill"></div></div>
+    <div class="bar gr"><div id="gr-fill"></div></div>
+    <div id="food-hint"></div>
+  </div>
+  <div id="right">
+    <div id="online">…</div>
+    <div id="lb"></div>
+    <div id="fps"></div>
+  </div>
+  <div id="feed"></div>
+  <div id="toast"></div>
+  <div id="joy"><div id="knob"></div></div>
+  <div id="btns">
+    <button id="b-run" class="btn small">💨<br>Бег</button>
+    <button id="b-sp" class="btn mid"><span>✨</span><small id="sp-name">Спец</small></button>
+    <button id="b-atk" class="btn big"><span>🦷</span><small>Атака</small></button>
+  </div>
+  <div id="keys-hint">WASD — ходить · Shift — бег · Пробел/клик — укус · E — спецудар · мышь — камера</div>
+</div>
+
+<!-- Меню -->
+<div id="menu">
+  <div class="panel">
+    <h1>🦖 Dino <span>Арена</span></h1>
+    <p class="sub">Онлайн 3D-битва динозавров. Расти от детёныша до прайма!</p>
+    <input id="nick" maxlength="14" placeholder="Твой ник" autocomplete="off">
+    <div id="cards"></div>
+    <p id="desc"></p>
+    <div class="modes">
+      <button class="mode" data-m="grow">🌱 <b>Рост</b><small>Начни детёнышем, ешь и расти</small></button>
+      <button class="mode" data-m="prime">⚔️ <b>Прайм-арена</b><small>Все сразу праймы, только драка</small></button>
+    </div>
+    <button id="play">ИГРАТЬ</button>
+    <p class="tiny">Игроки соединяются напрямую, без регистрации. Если никого нет, будут боты.</p>
+  </div>
+</div>
+
+<!-- Смерть -->
+<div id="death" class="hidden">
+  <div class="panel small">
+    <h2>☠️ Тебя съели</h2>
+    <p id="death-by"></p>
+    <button id="again">Снова тем же</button>
+    <button id="to-menu" class="ghost">Сменить динозавра</button>
+  </div>
+</div>
+
+<noscript>Для игры нужен JavaScript.</noscript>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
