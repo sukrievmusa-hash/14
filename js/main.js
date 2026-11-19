@@ -81,17 +81,18 @@ class Mech {
     this.combatT = 0; this.protUntil = o.local && !o.bot ? NOW() + 3000 : 0; this.eatT = 0; this.flashT = 0;
     this.moving = false; this.sprint = false; this.walk = 0; this.amp = 0; this.seed = Math.random() * 10;
     this.lastSeen = NOW(); this.peer = null; this.lastAtkFlag = 0; this.lastSpFlag = 0;
-    this.stunT = 0; this.slowT = 0; this.shieldT = 0; this.stunImm = 0; this.kvx = 0; this.kvz = 0; this.combo = 0; this.spFlagT = 0; this.ringT = 0; this.latch = null; this.sawT = 0; this.sawTick = 0; this.sawVis = 0; this.tailT = 0; this.hopT = 0; this.clung = false; this.vsp = 0; this.dir = 1; this.wasLatch = false; this.phase = ''; this.hits = 0; this.orbit = 1; this.orbitT = 2; this.home = null;
+    this.stunT = 0; this.slowT = 0; this.shieldT = 0; this.stunImm = 0; this.kvx = 0; this.kvz = 0; this.combo = 0; this.spFlagT = 0; this.ringT = 0; this.step = 0; this.chainT = 0; this.lastStep = 0; this.curMove = null; this.ultCd = 0; this.ultT = 0; this.ultFlagT = 0; this.lastUltFlag = 0; this.stormT = 0; this.stormTick = 0; this.stormLeft = 0; this.stormVis = 0; this.stormVT = 0; this.spinVis = 0; this.spinDur = 1; this.spinTurns = 1; this.sawMove = null; this.tailMove = null; this.latch = null; this.sawT = 0; this.sawTick = 0; this.sawVis = 0; this.tailT = 0; this.hopT = 0; this.clung = false; this.vsp = 0; this.dir = 1; this.wasLatch = false; this.phase = ''; this.hits = 0; this.orbit = 1; this.orbitT = 2; this.home = null;
     this.label = o.self || o.preview ? null : makeLabel();
     this.think = 0; this.wx = this.x; this.wz = this.z; this.target = null; this.flee = false; this.aggro = null;
   }
   get scale() { return growthScale(this.g); }
   maxHp() { return this.S.hp * statMul(this.g); }
   over() { return this.sp === 'rex' && this.frac() < 0.4; } // Разгон реактора
-  dmg() { return this.S.dmg * statMul(this.g) * (this.bot ? 0.8 : 1) * (this.over() ? 1.35 : 1); }
+  boost() { return this.ultT > 0 && this.S.ult.type === 'buff'; } // Форсаж
+  dmg() { return this.S.dmg * statMul(this.g) * (this.bot ? 0.8 : 1) * Math.max(this.over() ? 1.35 : 1, this.boost() ? 1.3 : 1); }
   radius() { return this.S.r * this.scale; }
   frac() { return this.local ? this.hp / this.maxHp() : this.hpFrac; }
-  speed(run) { return (run ? this.S.run : this.S.spd) * (0.8 + 0.3 * Math.min(this.g, 1)) * (inWater(this.x, this.z) && this.sp !== 'spino' ? 0.6 : 1) * (this.slowT > 0 ? 0.55 : 1); }
+  speed(run) { return (run ? this.S.run : this.S.spd) * (0.8 + 0.3 * Math.min(this.g, 1)) * (inWater(this.x, this.z) && this.sp !== 'spino' ? 0.6 : 1) * (this.slowT > 0 ? 0.55 : 1) * (this.boost() ? 1.15 : 1); }
   setGrowth(g) { const f = this.hp / this.maxHp(); this.g = Math.min(1, g); this.hp = f * this.maxHp(); }
   flash() { this.flashT = 0.09; }
   visual(dt, time) {
@@ -111,37 +112,45 @@ class Mech {
     // механическая походка: корпус чуть качается
     m.body.position.y = Math.abs(Math.sin(this.walk)) * 0.1 * this.amp;
     m.body.rotation.z = Math.sin(this.walk) * 0.04 * this.amp;
-    // у каждого робота своя анимация атаки
-    const type = this.S.atk.type;
+    // у каждого робота и у каждого удара серии своя анимация
+    const mv = this.curMove || this.S.moves[0], anim = mv.anim;
     m.body.rotation.x = 0; m.body.rotation.y = 0; m.body.position.z = 0;
-    let tailAdd = 0;
+    let tYaw = 0, tPitch = 0;
     if (this.atkAnim > 0) {
-      this.atkAnim = Math.max(0, this.atkAnim - dt * (this.S.atk.anim || 3));
-      const u = 1 - this.atkAnim, k = Math.sin(u * Math.PI);
-      if (type === 'bite') { m.head.rotation.x = k * 0.5; m.head.position.z = m.headZ + k * 0.6; m.body.rotation.x = k * 0.06; }
-      else if (type === 'combo') { m.head.rotation.x = k * 0.3; m.head.position.z = m.headZ + k * 0.5; m.body.rotation.y = (this.combo % 2 ? 1 : -1) * k * 0.45; }
-      else if (type === 'gore') { m.head.rotation.x = k * 0.8; m.head.position.z = m.headZ + k * 0.9; m.body.position.z = k * 0.5; m.body.rotation.x = k * 0.1; }
-      else if (type === 'tail') { // замах назад, затем хлёст
-        tailAdd = (u < 0.5 ? -Math.sin(u * 2 * Math.PI) * 0.7 : Math.sin((u - 0.5) * 2 * Math.PI) * 1.5) * this.dir;
-        m.body.rotation.y = -k * 0.25 * this.dir; m.head.rotation.x = 0; m.head.position.z = m.headZ;
-      } else { m.head.rotation.x = k * 0.2; m.head.position.z = m.headZ + k * 0.3; }
+      this.atkAnim = Math.max(0, this.atkAnim - dt * (mv.as || 3));
+      const u = 1 - this.atkAnim, k = Math.sin(u * Math.PI), sd = this.dir;
+      if (anim === 'bite') { m.head.rotation.x = k * 0.5; m.head.position.z = m.headZ + k * 0.6; m.body.rotation.x = k * 0.06; }
+      else if (anim === 'slap') { m.body.rotation.y = sd * k * 0.5; m.head.rotation.x = k * 0.2; m.head.position.z = m.headZ + k * 0.3; }
+      else if (anim === 'ram') { m.head.rotation.x = k * 0.6; m.head.position.z = m.headZ + k * 0.7; m.body.position.z = k * 0.8; m.body.rotation.x = k * 0.15; }
+      else if (anim === 'claw') { m.head.rotation.x = k * 0.3; m.head.position.z = m.headZ + k * 0.5; m.body.rotation.y = sd * k * 0.45; }
+      else if (anim === 'gore') { m.head.rotation.x = k * 0.8; m.head.position.z = m.headZ + k * 0.9; m.body.position.z = k * 0.5; m.body.rotation.x = k * 0.1; }
+      else if (anim === 'uppercut') { m.head.rotation.x = -k * 0.7; m.head.position.z = m.headZ + k * 0.5; m.body.rotation.x = -k * 0.08; }
+      else if (anim === 'tail') { // хвост поднимается над землёй, затем хлёст вниз-в сторону (не проходит сквозь корпус)
+        tPitch = u < 0.5 ? 0.9 * Math.sin(u / 0.5 * Math.PI / 2) : Math.max(0, 0.9 * (1 - (u - 0.5) / 0.4));
+        tYaw = u > 0.45 ? Math.sin(Math.min(1, (u - 0.45) / 0.55) * Math.PI) * 0.9 * sd : 0;
+        m.head.rotation.x = 0; m.head.position.z = m.headZ;
+      } else if (anim === 'tailside') { tYaw = (u - 0.5) * 2.2 * sd; tPitch = 0.2 * k; m.head.rotation.x = 0; m.head.position.z = m.headZ; }
+      else if (anim === 'spikes') { m.body.rotation.x = -k * 0.1; m.head.rotation.x = -k * 0.2; }
+      else if (anim === 'shock') { m.body.rotation.x = k * 0.06; m.head.rotation.x = -k * 0.15; }
+      else { m.head.rotation.x = k * 0.2; m.head.position.z = m.headZ + k * 0.3; }
     } else {
       // робот: голова сканирует местность рывками, как сервопривод
       const st = Math.round(Math.sin(time * 0.5 + this.seed) * 2) / 2;
       m.head.rotation.y += (st * 0.4 - m.head.rotation.y) * Math.min(1, dt * 10);
       m.head.rotation.x = Math.round(Math.sin(time * 0.9 + this.seed) * 3) / 3 * 0.05; m.head.position.z = m.headZ;
     }
-    if (this.sawVis > 0) { // хвост-пила раскручивается
-      this.sawVis -= dt;
-      const u = 1 - Math.max(0, this.sawVis) / (this.S.atk.spin || 0.7);
-      tailAdd = u * Math.PI * 4; m.body.rotation.y = Math.sin(u * Math.PI * 4) * 0.12;
+    if (this.spinVis > 0) { // вращение всем корпусом: хвост-пила и веер клинков (хвост не проходит сквозь тело)
+      this.spinVis -= dt;
+      const u = 1 - Math.max(0, this.spinVis) / this.spinDur;
+      m.root.rotation.y = this.rot + u * Math.PI * 2 * this.spinTurns;
     }
-    m.tail.rotation.y += tailAdd;
+    if (this.stormVis > 0 && !this.local) { this.stormVis -= dt; this.stormVT -= dt; if (this.stormVT <= 0) { this.stormVT += this.S.ult.dur / this.S.ult.strikes; stormStrike(this, false); } }
+    m.tail.rotation.y += tYaw; m.tail.rotation.x = tPitch;
     if (this.stunT > 0) m.head.rotation.z = Math.sin(time * 40) * 0.12; else m.head.rotation.z = 0;
     this.ringT -= dt;
     if (this.ringT <= 0) {
       if (this.shieldT > 0) { this.ringT = 0.45; ring(this.x, this.y, this.z, this.radius() * 1.5, '#66ccff'); }
-      else if (this.over()) { this.ringT = 0.3; sparks(this.x, this.y + this.S.h * s * 0.7, this.z, 0.5, 2); }
+      else if (this.over() || this.boost()) { this.ringT = 0.3; sparks(this.x, this.y + this.S.h * s * 0.7, this.z, 0.5, 2); }
       else if (this.stunT > 0) { this.ringT = 0.15; sparks(this.x, this.y + this.S.h * s, this.z, 0.5, 2); }
     }
     if (this.flashT > 0) { this.flashT -= dt; setFlash(m, this.flashT > 0); }
@@ -169,13 +178,13 @@ let fxI = 0;
 function sparks(x, y, z, s = 1, n = 8, up = 1) {
   for (let i = 0; i < n; i++) {
     const p = fx[fxI++ % fx.length];
-    p.life = 0.5 + Math.random() * 0.2; p.m.visible = true; p.m.position.set(x, y, z); p.m.scale.setScalar(s * (0.6 + Math.random() * 0.6));
+    p.life = 0.5 + Math.random() * 0.2; p.m.visible = true; p.m.position.set(x, Math.max(y, height(x, z) + 0.25), z); p.m.scale.setScalar(s * (0.6 + Math.random() * 0.6));
     p.vx = (Math.random() - 0.5) * 10 * s; p.vy = (2 + Math.random() * 7) * s * up; p.vz = (Math.random() - 0.5) * 10 * s; p.g = 22;
   }
 }
 const boltGeo = new THREE.BoxGeometry(0.14, 0.14, 1).translate(0, 0, 0.5);
 const bolts = [];
-for (let i = 0; i < 24; i++) { const m = new THREE.Mesh(boltGeo, new THREE.MeshBasicMaterial({ color: 0x7af6ff })); m.visible = false; scene.add(m); bolts.push({ m, life: 0 }); }
+for (let i = 0; i < 48; i++) { const m = new THREE.Mesh(boltGeo, new THREE.MeshBasicMaterial({ color: 0x7af6ff })); m.visible = false; scene.add(m); bolts.push({ m, life: 0 }); }
 let boltI = 0;
 const _b1 = new THREE.Vector3(), _b2 = new THREE.Vector3();
 function bolt(x1, y1, z1, x2, y2, z2, color = '#7af6ff') {
@@ -198,7 +207,7 @@ for (let i = 0; i < 6; i++) {
 let ringI = 0;
 function ring(x, y, z, R, color) {
   const r = rings[ringI++ % rings.length];
-  r.life = 0.45; r.R = R; r.m.visible = true; r.m.position.set(x, y + 0.4, z); r.m.material.color.set(color);
+  r.life = 0.45; r.R = R; r.m.visible = true; r.m.position.set(x, Math.max(y, height(x, z)) + 0.5, z); r.m.material.color.set(color);
 }
 function updateFx(dt) {
   for (const p of fx) {
@@ -252,8 +261,10 @@ function nearestInFront(a, reach, cone = 1.1, back = false) {
   return best;
 }
 // Автонаведение: если впереди никого, но враг рядом — разворачиваемся к нему
-function autoAim(a, reach, rear) {
-  if (rear ? nearestInFront(a, reach, a.S.atk.arc, true) : nearestInFront(a, reach)) return;
+function autoAim(a, reach, mv) {
+  if (mv && (mv.type === 'ring' || mv.type === 'saw')) return;
+  const rear = !!mv && mv.type === 'tail';
+  if (rear ? nearestInFront(a, reach, mv.arc, true) : nearestInFront(a, reach, mv && mv.cone || 1.1)) return;
   const t = nearestInFront(a, reach * 1.25, Math.PI);
   if (!t) return;
   // тяжёлые роботы разворачиваются медленно — автонаведение их не телепортирует
@@ -276,51 +287,97 @@ function dealDamage(a, t, amount, f) {
 const bodyPt = a => [a.x, a.y + a.S.h * 0.65 * a.scale, a.z];
 const nearEnemies = (a, R) => { const r = []; for (const e of ents.values()) if (e !== a && !e.dead && Math.hypot(e.x - a.x, e.z - a.z) - e.radius() < R) r.push(e); return r; };
 
-// Обычный удар: у каждого робота свой
-function primary(a, reach) {
-  const S = a.S, A = S.atk, type = A.type, d = a.dmg();
-  if (type === 'saw') { // Спино: хвост-пила крутится и пилит всех вокруг
-    a.sawT = A.spin; a.sawVis = A.spin; a.sawTick = A.spin / A.ticks * 0.5; a.sawLeft = A.ticks;
-    return;
+const rangeOf = (a, mv) => a.S.reach * a.scale * (mv.reach || 1);
+const jit = () => (Math.random() - 0.5) * 0.8;
+
+// Залп: самонаводящиеся выстрелы по ближайшим врагам (dry = только эффект, без урона — для чужих игроков)
+function volley(a, o, dry) {
+  const R = o.range * a.scale, list = [];
+  for (const e of ents.values()) {
+    if (e === a || e.dead) continue;
+    const dx = e.x - a.x, dz = e.z - a.z, d = Math.hypot(dx, dz) - e.radius();
+    if (d > R) continue;
+    if (o.cone < Math.PI && Math.abs(angDiff(a.rot, Math.atan2(dx, dz))) > o.cone) continue;
+    list.push([d, e]);
   }
-  if (type === 'tail') { a.tailT = A.wind; a.dir = -a.dir; return; } // Стего: замах, удар придёт чуть позже
-  const t = nearestInFront(a, reach);
-  if (!t) { if (a === me) sfx.clank(0.3); return; }
-  let m = 1, f = null;
-  if (type === 'combo') { a.combo = (a.combo + 1) % 3; if (a.combo === 2) { m = 1.7; sparks(t.x, t.y + 1, t.z, 1.2, 10); } } // Раптор: каждый 3-й — добивающий
-  if (type === 'gore') f = { kb: 4 };                                                                                       // Трицера: отбрасывает
-  dealDamage(a, t, d * m, f);
+  list.sort((p, q) => p[0] - q[0]);
+  const vis = camera.position.distanceTo(a.m.root.position) < 60;
+  const targets = list.slice(0, o.targets || 3).map(p => p[1]);
+  if (!targets.length) {
+    if (vis) for (let i = 0; i < Math.min(3, o.count); i++) bolt(...bodyPt(a), a.x + Math.sin(a.rot + (i - 1) * 0.2) * R * 0.7, a.y + a.S.h * 0.5 * a.scale, a.z + Math.cos(a.rot + (i - 1) * 0.2) * R * 0.7, o.color);
+    return false;
+  }
+  for (let i = 0; i < o.count; i++) {
+    const e = targets[i % targets.length];
+    if (!dry) dealDamage(a, e, a.dmg() * o.dmg, o.fx || null);
+    if (vis) bolt(...bodyPt(a), e.x + jit(), e.y + e.S.h * 0.55 * e.scale + jit(), e.z + jit(), o.color);
+  }
+  return true;
 }
 
-// Отложенные и затяжные атаки (пила, хвост, захваты) — считаются у владельца робота
+// Молния сверху по случайному врагу рядом (Грозовая буря)
+function stormStrike(a, real) {
+  const U = a.S.ult, R = U.range * a.scale, list = [];
+  for (const e of ents.values()) if (e !== a && !e.dead && Math.hypot(e.x - a.x, e.z - a.z) - e.radius() < R) list.push(e);
+  let x, z, y;
+  if (list.length) { const e = list[Math.floor(Math.random() * list.length)]; x = e.x; z = e.z; y = e.y + e.S.h * 0.5 * e.scale; if (real) dealDamage(a, e, a.dmg() * U.dmg, U.fx); }
+  else if (real) return;
+  else { const an = Math.random() * 6.28, r = 4 + Math.random() * 8; x = a.x + Math.sin(an) * r; z = a.z + Math.cos(an) * r; y = height(x, z) + 1; }
+  if (camera.position.distanceTo(a.m.root.position) < 70) { bolt(x + jit(), y + 16, z + jit(), x, y, z, '#ffffff'); ring(x, y - 1, z, 2.5, '#59a8ff'); }
+}
+
+// Удар из серии: у каждого свой тип
+function doMove(a, mv) {
+  const reach = rangeOf(a, mv), d = a.dmg();
+  a.curMove = mv;
+  if (mv.spin) { a.spinVis = a.spinDur = mv.spin; a.spinTurns = mv.turns || 2; }
+  if (mv.type === 'saw') { a.sawMove = mv; a.sawT = mv.spin; a.sawTick = mv.spin / mv.ticks * 0.5; a.sawLeft = mv.ticks; return; }     // хвост-пила
+  if (mv.type === 'tail') { a.tailMove = mv; a.tailT = mv.wind; return; }                                                              // хвост назад (удар придёт после замаха)
+  if (mv.type === 'volley') { volley(a, mv); return; }                                                                                 // залп шипов
+  if (mv.type === 'ring') {                                                                                                            // удар вокруг себя
+    for (const e of nearEnemies(a, reach * 0.95)) dealDamage(a, e, d * mv.dmg, mv.fx || null);
+    ring(a.x, a.y, a.z, reach * 0.95, a.S.glow);
+    return;
+  }
+  if (mv.lunge) { a.kvx += Math.sin(a.rot) * mv.lunge; a.kvz += Math.cos(a.rot) * mv.lunge; }                                         // рывок вперёд
+  const t = nearestInFront(a, reach, mv.cone || 1.1);
+  if (t) dealDamage(a, t, d * mv.dmg, mv.fx || null);
+  else if (a === me) sfx.clank(0.3);
+}
+
+// Отложенные и затяжные атаки (пила, хвост, захваты, буря) — считаются у владельца робота
 function tickAttacks(d, dt) {
-  const A = d.S.atk;
   if (d.sawT > 0) {
+    const A = d.sawMove;
     d.sawT -= dt; d.sawTick -= dt;
-    if (d.sawTick <= 0 && d.sawLeft > 0) {
+    if (A && d.sawTick <= 0 && d.sawLeft > 0) {
       d.sawTick += A.spin / A.ticks; d.sawLeft--;
-      const R = d.S.reach * d.scale * 0.9;
-      for (const e of nearEnemies(d, R)) dealDamage(d, e, d.dmg() * A.tickMult, { sl: 0.5 });
+      for (const e of nearEnemies(d, d.S.reach * d.scale * 0.9)) dealDamage(d, e, d.dmg() * A.dmg, { sl: 0.5 });
       if (camera.position.distanceTo(d.m.root.position) < 50) sparks(d.x + Math.sin(d.rot + Math.PI) * 4 * d.scale, d.y + 1, d.z + Math.cos(d.rot + Math.PI) * 4 * d.scale, 0.8, 4);
     }
   }
   if (d.tailT > 0) {
     d.tailT -= dt;
-    if (d.tailT <= 0) { // хлёст хвостом назад
-      const R = d.S.reach * d.scale;
+    if (d.tailT <= 0 && d.tailMove) { // хлёст хвостом назад
+      const A = d.tailMove, R = d.S.reach * d.scale * (A.reach || 1);
       let hit = false;
       for (const e of ents.values()) {
         if (e === d || e.dead) continue;
         const dx = e.x - d.x, dz = e.z - d.z, dist = Math.hypot(dx, dz) - e.radius();
         if (dist > R) continue;
         if (Math.abs(angDiff(d.rot + Math.PI, Math.atan2(dx, dz))) > A.arc && dist > d.radius() * 0.3) continue;
-        hit = true; dealDamage(d, e, d.dmg(), { kb: A.kb });
+        hit = true; dealDamage(d, e, d.dmg() * A.dmg, { kb: A.kb });
       }
       if (camera.position.distanceTo(d.m.root.position) < 50) {
         ring(d.x - Math.sin(d.rot) * R * 0.6, d.y, d.z - Math.cos(d.rot) * R * 0.6, 2.2 * d.scale, d.S.glow);
         if (d === me) { shake = Math.max(shake, hit ? 0.3 : 0.1); sfx.clank(hit ? 1 : 0.3); }
       }
     }
+  }
+  if (d.stormT > 0) { // Грозовая буря
+    const U = d.S.ult;
+    d.stormT -= dt; d.stormTick -= dt;
+    if (d.stormTick <= 0 && d.stormLeft > 0) { d.stormTick += U.dur / U.strikes; d.stormLeft--; stormStrike(d, true); }
   }
   const L = d.latch;
   if (L) { // захват: Рекс держит челюстями, Раптор сидит на спине
@@ -353,22 +410,43 @@ function specialFx(a) {
   } else if (sp.type === 'area') {
     const R = sp.radius * a.scale;
     ring(a.x, a.y, a.z, R, S.glow); ring(a.x, a.y + 0.3, a.z, R * 0.7, '#ffffff');
+    for (let i = 0; i < 8; i++) { const an = i * 0.785; sparks(a.x + Math.sin(an) * R * 0.6, a.y + 0.5, a.z + Math.cos(an) * R * 0.6, 0.7, 2, 0.6); }
+  }
+}
+
+// Эффект ультимейта; remote = чужой игрок (урон уже посчитал он сам)
+function ultFx(a, remote) {
+  const U = a.S.ult;
+  if (camera.position.distanceTo(a.m.root.position) > 70) return;
+  if (U.type === 'stomp') {
+    for (let i = 1; i <= 3; i++) ring(a.x, a.y, a.z, U.radius * a.scale * i / 3, i === 3 ? a.S.glow : '#ffffff');
+    for (let i = 0; i < 14; i++) { const an = i * 0.45; sparks(a.x + Math.sin(an) * U.radius * 0.7, a.y + 0.3, a.z + Math.cos(an) * U.radius * 0.7, 0.9, 2, 0.5); }
+    if (a === me || camera.position.distanceTo(a.m.root.position) < 30) shake = Math.max(shake, 0.5);
+  } else {
+    ring(a.x, a.y, a.z, 5 * a.scale, a.S.glow);
+    if (remote) {
+      if (U.type === 'barrage') volley(a, { count: U.count, range: U.range, cone: Math.PI, dmg: 0, targets: 3, color: '#ffb03a' }, true);
+      if (U.type === 'storm') { a.stormVis = U.dur; a.stormVT = 0.1; }
+    }
   }
 }
 
 function attack(a, special) {
   if (!a || a.dead || a.stunT > 0) return;
   if (a.latch) { if (special && a.latch.kind === 'cling') { a.latch = null; a.spT = Math.max(a.spT, 1.5); } return; } // повторный «Спец» — спрыгнуть
-  const S = a.S, reach = S.reach * a.scale;
+  const S = a.S;
   if (!special) {
     if (a.atkT > 0) return;
-    if (a === me) autoAim(a, reach, S.atk.type === 'tail');
-    a.atkT = S.cd * (a.over() ? 0.75 : 1); a.atkAnim = 1; a.atkFlagT = S.atk.type === 'saw' ? 0.8 : 0.3;
-    primary(a, reach);
+    if (a.chainT <= 0) a.step = 0;
+    const step = a.step, mv = S.moves[step];
+    if (a === me) autoAim(a, rangeOf(a, mv), mv);
+    a.lastStep = step; a.step = (step + 1) % S.moves.length; a.chainT = mv.win || 1.7;
+    a.atkT = mv.cd * (a.over() || a.boost() ? 0.78 : 1); a.atkAnim = 1; a.atkFlagT = mv.type === 'saw' ? 0.8 : 0.3; a.dir = -a.dir;
+    doMove(a, mv);
     return;
   }
   if (a.spT > 0) return;
-  const sp = S.special, range = (sp.range || S.reach) * a.scale;
+  const reach = S.reach * a.scale, sp = S.special, range = (sp.range || S.reach) * a.scale;
   if (a === me && sp.type !== 'area') autoAim(a, range);
   a.spT = sp.cd; a.atkAnim = 1; a.atkFlagT = 0.4; a.spFlagT = 0.4;
   const near = a === me || camera.position.distanceTo(a.m.root.position) < 45;
@@ -389,14 +467,27 @@ function attack(a, special) {
       if (n2) dealDamage(a, n2, a.dmg() * sp.mult * 0.5, sp.fx);
     } else miss = true;
   } else if (sp.type === 'area') {
-    const R = sp.radius * a.scale;
-    for (const e of nearEnemies(a, R)) dealDamage(a, e, a.dmg() * sp.mult, sp.fx);
-    if (sp.shield) a.shieldT = sp.shield; // Стего: режим бастиона
+    for (const e of nearEnemies(a, sp.radius * a.scale)) dealDamage(a, e, a.dmg() * sp.mult, sp.fx);
   } else if (sp.type === 'dash' || sp.type === 'leap') {
     a.dashT = sp.dur; a.dashHit = new Set();
   }
   if (miss) a.spT = Math.min(a.spT, 2);
   if (near) specialFx(a);
+}
+
+// Ультимейт: у каждого робота свой, долгая перезарядка
+function ultimate(a) {
+  if (!a || a.dead || a.stunT > 0 || a.latch || a.ultCd > 0) return;
+  const U = a.S.ult;
+  a.ultCd = U.cd; a.ultFlagT = 0.5; a.atkAnim = 1;
+  if (a === me || camera.position.distanceTo(a.m.root.position) < 45) sfx.roar(0.7, a === me ? 1 : 0.5);
+  if (U.type === 'buff') a.ultT = U.dur;
+  else if (U.type === 'barrage') volley(a, { count: U.count, range: U.range, cone: Math.PI, dmg: U.dmg, targets: 3, color: '#ffb03a' });
+  else if (U.type === 'storm') { a.stormT = U.dur; a.stormTick = 0.1; a.stormLeft = U.strikes; }
+  else if (U.type === 'stomp') for (const e of nearEnemies(a, U.radius * a.scale)) dealDamage(a, e, a.dmg() * U.dmg, U.fx);
+  else if (U.type === 'fortress') a.shieldT = U.dur;
+  ultFx(a, false);
+  if (a === me) toast(`${U.name}!`);
 }
 
 const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, +v || 0));
@@ -409,7 +500,7 @@ function applyDamage(t, dmg, byId, byName, f) {
     sparks(t.x, t.y + 1, t.z, 0.5, 4, 0.4); return;
   }
   if (t.sp === 'trike' && att && Math.abs(angDiff(t.rot, Math.atan2(att.x - t.x, att.z - t.z))) < 0.9) dmg *= 0.6; // фронтальная броня
-  if (t.shieldT > 0) dmg *= 0.5;
+  if (t.shieldT > 0) dmg *= 0.45; // Крепость
   dmg = Math.round(dmg);
   t.hp -= dmg; t.combatT = 6; t.flash();
   if (t.latch && t.latch.kind === 'cling') { t.latch.dmg += dmg; if (t.latch.dmg > t.maxHp() * 0.18) { t.latch = null; t.spT = Math.max(t.spT, 2); if (t === me) toast('Сбросили с брони!'); } } // сбили наездника
@@ -417,7 +508,7 @@ function applyDamage(t, dmg, byId, byName, f) {
   if (f.sl) t.slowT = Math.max(t.slowT, f.sl);
   if (f.kb && att) { const dx = t.x - att.x, dz = t.z - att.z, dd = Math.hypot(dx, dz) || 1; t.kvx += dx / dd * f.kb * 3; t.kvz += dz / dd * f.kb * 3; }
   if (t.sp === 'stego' && att && !att.dead && !f.th && att !== t) { // Шипы-контрудар
-    const r = Math.round(dmg * 0.15);
+    const r = Math.round(dmg * (t.shieldT > 0 ? 0.3 : 0.15));
     if (r > 0) {
       sparks(att.x, att.y + 1, att.z, 0.6, 4);
       if (att.local) applyDamage(att, r, t.id, t.name, { th: 1 });
@@ -481,13 +572,17 @@ const handlers = {
       e.tx = x; e.tz = z; e.trot = rot; e.g = Math.max(0, Math.min(1, +g || 0)); e.hpFrac = hp; e.kills = kills | 0;
       e.moving = (flags & 1) !== 0; e.sprint = (flags & 4) !== 0;
       const af = flags & 2;
-      const sf = flags & 16;
-      if (af && !e.lastAtkFlag) {
-        e.atkAnim = 1; e.dir = -e.dir;
-        if (e.S.atk.type === 'saw' && !sf) e.sawVis = e.S.atk.spin;
-      }
+      const sf = flags & 16, uf = flags & 1024;
+      if (af && !e.lastAtkFlag && !sf) {
+        const mv = e.S.moves[(flags >> 7) & 3] || e.S.moves[0];
+        e.curMove = mv; e.atkAnim = 1; e.dir = -e.dir;
+        if (mv.spin) { e.spinVis = e.spinDur = mv.spin; e.spinTurns = mv.turns || 2; }
+        if (mv.type === 'volley') volley(e, mv, true);
+      } else if (af && !e.lastAtkFlag) e.atkAnim = 1;
       if (sf && !e.lastSpFlag) specialFx(e);
-      e.lastAtkFlag = af; e.lastSpFlag = sf;
+      if (uf && !e.lastUltFlag) { e.atkAnim = 1; ultFx(e, true); }
+      e.lastAtkFlag = af; e.lastSpFlag = sf; e.lastUltFlag = uf;
+      e.ultT = (flags & 512) ? 0.5 : 0;
       e.shieldT = (flags & 32) ? 0.5 : 0; e.clung = (flags & 64) !== 0;
     }
     for (const e of ents.values()) if (!e.local && e.peer === peerId && !seen.has(e.id)) { ents.delete(e.id); e.dispose(); }
@@ -535,7 +630,7 @@ function sendState() {
   const e = [];
   for (const d of ents.values()) {
     if (!d.local || d.dead) continue;
-    const flags = (d.moving ? 1 : 0) | (d.atkFlagT > 0 ? 2 : 0) | (d.sprint ? 4 : 0) | (d.bot ? 8 : 0) | (d.spFlagT > 0 ? 16 : 0) | (d.shieldT > 0 ? 32 : 0) | (d.latch && d.latch.kind === 'cling' ? 64 : 0);
+    const flags = (d.moving ? 1 : 0) | (d.atkFlagT > 0 ? 2 : 0) | (d.sprint ? 4 : 0) | (d.bot ? 8 : 0) | (d.spFlagT > 0 ? 16 : 0) | (d.shieldT > 0 ? 32 : 0) | (d.latch && d.latch.kind === 'cling' ? 64 : 0) | ((d.lastStep & 3) << 7) | (d.ultT > 0 ? 512 : 0) | (d.ultFlagT > 0 ? 1024 : 0);
     e.push([d.id, SP_KEYS.indexOf(d.sp), d.name, r1(d.x), r1(d.z), r2(d.rot), r2(d.g), r2(Math.max(0, d.hp / d.maxHp())), flags, d.kills]);
   }
   net.state({ c: clientId, e });
@@ -575,6 +670,7 @@ function spawnBot() {
 }
 
 // ================= Движение (общее для игрока и ботов) =================
+const isClung = e => (e.local ? !!(e.latch && e.latch.kind === 'cling') : e.clung);
 function moveMech(d, mx, mz, run, dt) {
   if (d.stunT > 0) { mx = 0; mz = 0; run = false; d.dashT = 0; }
   if (d.latch) {
@@ -628,7 +724,7 @@ function moveMech(d, mx, mz, run, dt) {
     if (Math.abs(d.kvx) + Math.abs(d.kvz) < 0.1) d.kvx = d.kvz = 0;
   }
   for (const e of ents.values()) {
-    if (e === d || e.dead) continue;
+    if (e === d || e.dead || isClung(e)) continue; // наездник на спине не должен выталкивать хозяина (иначе тот «улетает»)
     const dx = d.x - e.x, dz = d.z - e.z, dist = Math.hypot(dx, dz), m = (d.radius() + e.radius()) * 0.75;
     if (dist < m && dist > 0.001) { const k = (m - dist) / dist * (e.local ? 0.5 : 1); d.x += dx * k; d.z += dz * k; }
   }
@@ -645,7 +741,7 @@ function levelUp(d) {
 
 function tickCommon(d, dt) {
   d.atkT -= dt; d.spT -= dt; d.atkFlagT -= dt; d.combatT -= dt; d.spFlagT -= dt;
-  d.stunT -= dt; d.slowT -= dt; d.shieldT -= dt; d.stunImm -= dt;
+  d.stunT -= dt; d.slowT -= dt; d.shieldT -= dt; d.stunImm -= dt; d.chainT -= dt; d.ultCd -= dt; d.ultT -= dt; d.ultFlagT -= dt;
   tickAttacks(d, dt);
   if (d.sp === 'spino' && inWater(d.x, d.z)) d.hp = Math.min(d.maxHp(), d.hp + d.maxHp() * 0.04 * dt); // водяное охлаждение
   if (mode === 'grow' && d.g < 1) {
@@ -714,7 +810,7 @@ function botAI(b, dt) {
     const dx = t.x - b.x, dz = t.z - b.z, d = Math.hypot(dx, dz) || 1, ang = Math.atan2(dx, dz);
     const reach = b.S.reach * b.scale + t.radius();
     const off = Math.abs(angDiff(b.rot, ang));
-    const lim = b.S.turn * dt;
+    const step = b.chainT > 0 ? b.step : 0, lim = b.S.turn * dt;
     const face = () => { b.rot += Math.max(-lim, Math.min(lim, angDiff(b.rot, ang))); };
     const fwd = (k = 1) => { mx = dx / d * k; mz = dz / d * k; };
     const back = () => { mx = -dx / d; mz = -dz / d; };
@@ -738,20 +834,27 @@ function botAI(b, dt) {
       b.orbitT -= dt; if (b.orbitT <= 0) { b.orbit = -b.orbit; b.orbitT = 2.5 + Math.random() * 1.5; }
       const R = b.S.reach * b.scale * 0.9;
       if (d > R * 1.1) { fwd(); run = d > 14 && b.st > 30; if (b.spT <= 0 && d > 6 && d < b.S.special.range * 0.9 * b.scale) { face(); if (off < 0.35) attack(b, true); } }
+      else if (step === 1) { mx = 0; mz = 0; face(); if (off < 0.6) attack(b, false); } // укус: надо смотреть на врага
       else { if (d < R * 0.5) { const bx = -dx / d, bz = -dz / d; side(0.8); mx = mx + bx * 0.4; mz = mz + bz * 0.4; } else side(0.9); attack(b, false); }
     } else if (ai === 'rammer') { // Трицера: разгоняется и таранит
       if (d > reach * 0.85) { fwd(); run = d > 10 && b.st > 30; if (b.spT <= 0 && d > 6 && d < 20 && off < 0.25) attack(b, true); }
       else { face(); if (off < 0.6) attack(b, false); }
-    } else { // bastion — Стего: стоит на месте, разворачивается к врагу задом и бьёт хвостом
+    } else { // bastion — Стего: стоит на месте, разворачивается к врагу задом и бьёт хвостом, потом лицом — залп шипов
       const hd = Math.hypot(b.home.x - b.x, b.home.z - b.z);
       const hitD = b.S.reach * b.scale + t.radius();
       if (hd > 20) { mx = (b.home.x - b.x) / hd; mz = (b.home.z - b.z) / hd; }
-      else if (d < hitD * 1.5) { // враг близко: поворачиваемся хвостом
-        const want = ang + Math.PI; b.rot += Math.max(-lim, Math.min(lim, angDiff(b.rot, want)));
-        if (Math.abs(angDiff(b.rot + Math.PI, ang)) < 0.8 && d < hitD) attack(b, false);
+      else if (d < hitD * 1.5 || (step === 2 && d < 9)) {
+        const rear = step < 2, want = rear ? ang + Math.PI : ang;
+        b.rot += Math.max(-lim, Math.min(lim, angDiff(b.rot, want)));
+        if (Math.abs(angDiff(rear ? b.rot + Math.PI : b.rot, ang)) < (rear ? 0.8 : 0.45) && d < (rear ? hitD : 9)) attack(b, false);
       } else if (d < 14) face();
       const R = b.S.special.radius * b.scale * 0.9;
       if (b.spT <= 0 && d < R && (b.hp < b.maxHp() * 0.7 || Math.random() < 0.03)) attack(b, true);
+    }
+    if (b.ultCd <= 0 && !b.flee && Math.random() < 0.05) { // ультимейт по ситуации
+      const U = b.S.ult;
+      const go = U.type === 'buff' ? d < 12 : U.type === 'barrage' || U.type === 'storm' ? d < U.range * 0.8 : U.type === 'stomp' ? d < U.radius * 0.85 : (b.hp < b.maxHp() * 0.65 && d < 14);
+      if (go) ultimate(b);
     }
   } else {
     const dx = b.wx - b.x, dz = b.wz - b.z, d = Math.hypot(dx, dz) || 1;
@@ -779,6 +882,7 @@ addEventListener('keydown', e => {
   if (!playing) return;
   if (e.code === 'Space' || e.code === 'KeyJ') { attack(me, false); e.preventDefault(); }
   if (e.code === 'KeyE' || e.code === 'KeyK') attack(me, true);
+  if (e.code === 'KeyQ' || e.code === 'KeyL' || e.code === 'KeyR') ultimate(me);
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -830,6 +934,7 @@ function bindBtn(id, fn) {
 }
 bindBtn('b-atk', () => attack(me, false));
 bindBtn('b-sp', () => attack(me, true));
+bindBtn('b-ult', () => ultimate(me));
 bindBtn('b-run', () => { runToggle = !runToggle; $('b-run').classList.toggle('on', runToggle); });
 
 function updatePlayer(dt) {
@@ -951,7 +1056,11 @@ function updateHud() {
   $('gr-fill').style.width = Math.min(1, me.g) * 100 + '%';
   $('stage').innerHTML = `<b style="color:${me.S.glow}">${me.S.name}</b> · ${STAGES[stageIndex(me.g)]}` + (me.g < 1 ? ` <small>${Math.floor(me.g * 100)}%</small>` : ' ★');
   $('b-sp').style.setProperty('--cd', Math.max(0, me.spT / me.S.special.cd));
-  $('b-atk').style.setProperty('--cd', Math.max(0, me.atkT / me.S.cd));
+  const mv = me.S.moves[me.chainT > 0 ? me.step : 0];
+  $('b-atk').style.setProperty('--cd', Math.max(0, me.atkT / mv.cd));
+  $('b-ult').style.setProperty('--cd', Math.max(0, me.ultCd / me.S.ult.cd));
+  $('b-ult').classList.toggle('ready', me.ultCd <= 0);
+  if ($('atk-name').textContent !== mv.name) $('atk-name').textContent = mv.name;
   $('food-hint').textContent = mode === 'prime' ? (me.S.diet === 'carn' ? '🔩 Металлолом чинит броню' : '💎 Кристаллы чинят броню')
     : me.S.diet === 'carn' ? '🔩 Собирай металлолом и побеждай' : '💎 Собирай энергокристаллы';
 }
@@ -990,9 +1099,10 @@ function renderCards() {
     </button>`;
   }).join('');
   const S = SPECIES[chosen];
-  $('desc').innerHTML = `${S.desc}
-    <div class="tr"><b>⚔️ ${S.atk.name}:</b> ${S.atk.info}</div>
+  $('desc').innerHTML = `<span class="dd">${S.desc}</span>
+    <div class="tr"><b>⚔️ Серия:</b> ${S.moves.map(m => m.name).join(' → ')}</div>
     <div class="tr"><b style="color:${S.glow}">✨ ${S.special.name}:</b> ${S.special.info}</div>
+    <div class="tr"><b style="color:${S.glow}">🌀 ${S.ult.name}:</b> ${S.ult.info}</div>
     <div class="tr"><b>🛡 ${S.passive.name}:</b> ${S.passive.info}</div>
     <div class="tr"><b>🧠 Стиль:</b> ${S.aiInfo}</div>`;
   document.querySelectorAll('.card').forEach(b => b.onclick = () => { chosen = b.dataset.k; renderCards(); });
@@ -1014,7 +1124,7 @@ function startGame() {
   if (mode !== chosenMode || !net) startNet(chosenMode);
   if (me) { ents.delete(me.id); me.dispose(); me = null; }
   spawnMe(chosen, name);
-  $('sp-name').textContent = SPECIES[chosen].special.name;
+  $('sp-name').textContent = SPECIES[chosen].special.name; $('ult-name').textContent = SPECIES[chosen].ult.name;
   toast(chosenMode === 'prime' ? 'Прайм-арена: все на максимуме. В бой!' : 'Собирай ресурсы и прокачайся до ПРАЙМА!');
 }
 $('play').onclick = startGame;

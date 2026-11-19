@@ -67,6 +67,8 @@ body.touch #keys-hint { display: none; }
 .btn.big { width: 104px; height: 104px; right: 0; bottom: 0; font-size: 34px; background-color: rgba(220,70,40,.5); }
 .btn.mid { width: 80px; height: 80px; right: 112px; bottom: 6px; font-size: 26px; background-color: rgba(255,170,40,.42); }
 .btn.small { width: 60px; height: 60px; right: 24px; bottom: 114px; font-size: 20px; }
+.btn.ult { width: 66px; height: 66px; right: 108px; bottom: 96px; font-size: 22px; background-color: rgba(120,90,255,.45); border-color: rgba(190,170,255,.7); }
+.btn.ult.ready { box-shadow: 0 0 14px 3px rgba(150,120,255,.85); }
 .btn.small.on { background-color: rgba(255,200,40,.8); }
 
 /* ---------- Меню ---------- */
@@ -132,6 +134,7 @@ h2 { font-size: 24px; margin: 4px 0 6px; font-style: italic; }
   .st { margin: 2px 0; }
   #desc { font-size: 11px; min-height: 28px; max-height: 42vh; overflow-y: auto; }
   #desc .tr { font-size: 10px; margin-top: 2px; }
+  #desc .dd { display: none; }
   .modes { margin: 6px 0; } .mode { padding: 6px; font-size: 13px; }
   #play { padding: 9px; font-size: 18px; }
   #bars { width: min(230px, 32vw); }
@@ -140,5 +143,6 @@ h2 { font-size: 24px; margin: 4px 0 6px; font-style: italic; }
   #toast { font-size: 18px; top: 22%; }
   .btn.big { width: 92px; height: 92px; } .btn.mid { width: 70px; height: 70px; right: 100px; }
   .btn.small { width: 54px; height: 54px; bottom: 100px; }
+  .btn.ult { width: 58px; height: 58px; right: 98px; bottom: 84px; }
   .panel.small { padding: 12px; } #death-stats b { font-size: 17px; }
 }
