@@ -12,6 +12,27 @@ export function initAudio() {
 function env(g, t, a, peak, dur) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + dur); }
 
 export const sfx = {
+  // металлический лязг удара
+  clank(vol = 1) {
+    if (!ctx) return; const t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = noise;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2400; f.Q.value = 3;
+    const g = ctx.createGain(); env(g, t, 0.003, 0.9 * vol, 0.15);
+    s.connect(f).connect(g).connect(master); s.start(t); s.stop(t + 0.16);
+    [523, 1390].forEach(fr => {
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = fr * (0.9 + Math.random() * 0.2);
+      const og = ctx.createGain(); env(og, t, 0.002, 0.12 * vol, 0.35);
+      o.connect(og).connect(master); o.start(t); o.stop(t + 0.36);
+    });
+  },
+  // взрыв при уничтожении меха
+  boom() {
+    if (!ctx) return; const t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = noise;
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(1200, t); f.frequency.exponentialRampToValueAtTime(80, t + 0.6);
+    const g = ctx.createGain(); env(g, t, 0.01, 1.0, 0.7);
+    s.connect(f).connect(g).connect(master); s.start(t); s.stop(t + 0.5);
+  },
   bite(vol = 1) {
     if (!ctx) return; const t = ctx.currentTime;
     const s = ctx.createBufferSource(); s.buffer = noise;
@@ -22,10 +43,12 @@ export const sfx = {
   roar(pitch = 1, vol = 1) {
     if (!ctx) return; const t = ctx.currentTime;
     const o = ctx.createOscillator(); o.type = 'sawtooth';
-    o.frequency.setValueAtTime(140 * pitch, t); o.frequency.exponentialRampToValueAtTime(55 * pitch, t + 0.8);
-    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 600;
-    const g = ctx.createGain(); env(g, t, 0.05, 0.5 * vol, 0.9);
-    o.connect(f).connect(g).connect(master); o.start(t); o.stop(t + 0.95);
+    o.frequency.setValueAtTime(90 * pitch, t); o.frequency.exponentialRampToValueAtTime(220 * pitch, t + 0.25); o.frequency.exponentialRampToValueAtTime(60 * pitch, t + 0.8);
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 28; const lg = ctx.createGain(); lg.gain.value = 25 * pitch;
+    lfo.connect(lg).connect(o.frequency);
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 900;
+    const g = ctx.createGain(); env(g, t, 0.04, 0.45 * vol, 0.9);
+    o.connect(f).connect(g).connect(master); o.start(t); o.stop(t + 0.95); lfo.start(t); lfo.stop(t + 0.95);
   },
   hurt() {
     if (!ctx) return; const t = ctx.currentTime;

@@ -1,0 +1,9 @@
+{
+  "name": "МЕХАЗАВРЫ",
+  "short_name": "Мехазавры",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#14181d",
+  "theme_color": "#14181d"
+}

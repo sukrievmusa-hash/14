@@ -1,4 +1,4 @@
-// Мир: холмистый рельеф, озёра, деревья, камни, еда (кусты и мясо).
+// Мир: холмистый рельеф, озёра, деревья, камни, еда мехов (энергокристаллы и металлолом).
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -124,29 +124,33 @@ export class World {
     }
     scene.add(rockM);
 
-    // ----- Кусты с ягодами (еда травоядных) -----
-    const bushParts = [colored(new THREE.IcosahedronGeometry(1, 0), '#3f8f3a')];
-    for (let i = 0; i < 6; i++) {
-      const a = i * 1.05, b = new THREE.BoxGeometry(0.25, 0.25, 0.25);
-      b.translate(Math.cos(a) * 0.85, 0.2 + (i % 2) * 0.4, Math.sin(a) * 0.85);
-      bushParts.push(colored(b, '#d6334a'));
-    }
+    // ----- Энергокристаллы (еда травоядных мехов) -----
+    this.glowMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+    const crys = [colored(new THREE.DodecahedronGeometry(0.8, 0).scale(1, 0.45, 1), '#3b4048')];
+    [[0, 0, 0, 1.4], [0.45, 0.1, 0.5, 0.9], [-0.5, 0.15, 0.3, 1.0], [0.1, 0.05, -0.55, 0.8]].forEach(([x, rz, rx, h], i) => {
+      const g = new THREE.OctahedronGeometry(0.35, 0).scale(1, h * 2.2, 1);
+      g.rotateZ(rz * (i % 2 ? 1 : -1)); g.rotateX(rx * 0.4); g.translate(x, h * 0.6, (i - 1.5) * 0.25);
+      crys.push(colored(g, i % 2 ? '#5ff3ff' : '#2fc6ff'));
+    });
     this.NP = 70;
-    this.bushM = new THREE.InstancedMesh(mergeGeometries(bushParts), this.vmat, this.NP);
+    this.bushM = new THREE.InstancedMesh(mergeGeometries(crys), this.glowMat, this.NP);
     this.plants = [];
     for (let i = 0; i < this.NP; i++) { const p = { i, active: false, t: 0, x: 0, z: 0 }; this.plants.push(p); this.placePlant(p); }
     scene.add(this.bushM);
 
-    // ----- Мясо (еда хищников) -----
-    const meatGeo = mergeGeometries([
-      colored(new THREE.BoxGeometry(1.6, 0.6, 1.0), '#a8323a'),
-      colored(new THREE.BoxGeometry(1.2, 0.25, 0.8).translate(0, 0.4, 0), '#c9505a'),
-      colored(new THREE.CylinderGeometry(0.12, 0.12, 2.4, 5).rotateZ(Math.PI / 2).translate(0, 0.3, 0.2), '#f1eadb'),
-      colored(new THREE.CylinderGeometry(0.1, 0.1, 1.6, 5).rotateZ(Math.PI / 2).translate(0, 0.25, -0.3), '#f1eadb'),
+    // ----- Металлолом (еда хищных мехов) -----
+    const scrapGeo = mergeGeometries([
+      colored(new THREE.BoxGeometry(1.6, 0.5, 1.0).rotateY(0.3), '#6d737b'),
+      colored(new THREE.BoxGeometry(0.9, 0.5, 0.7).rotateZ(0.4).translate(0.4, 0.35, 0.1), '#8e5a3a'),
+      colored(new THREE.CylinderGeometry(0.18, 0.18, 1.8, 6).rotateZ(Math.PI / 2).rotateY(0.8).translate(-0.1, 0.35, -0.2), '#aab0b8'),
+      colored(new THREE.BoxGeometry(0.5, 0.18, 0.5).rotateX(0.5).translate(-0.6, 0.4, 0.3), '#3a3f47'),
     ]);
+    const cellGeo = colored(new THREE.CylinderGeometry(0.16, 0.16, 0.5, 6).translate(0.15, 0.6, -0.35), '#ffd23a');
     this.meats = [];
     for (let i = 0; i < 30; i++) {
-      const mesh = new THREE.Mesh(meatGeo, this.vmat); mesh.visible = false; scene.add(mesh);
+      const mesh = new THREE.Mesh(scrapGeo, this.vmat); mesh.visible = false;
+      mesh.add(new THREE.Mesh(cellGeo, this.glowMat));
+      scene.add(mesh);
       this.meats.push({ mesh, active: false, bites: 0, x: 0, z: 0, s: 1, natural: false, life: 0 });
     }
     this.naturalTimer = 0;
@@ -195,7 +199,7 @@ export class World {
     const [x, z] = this.randLand();
     p.x = x; p.z = z; p.active = true;
     const o = new THREE.Object3D();
-    o.position.set(x, height(x, z) + 0.5, z); o.rotation.y = Math.random() * 6; o.scale.setScalar(0.9 + Math.random() * 0.4); o.updateMatrix();
+    o.position.set(x, height(x, z) + 0.15, z); o.rotation.y = Math.random() * 6; o.scale.setScalar(0.9 + Math.random() * 0.4); o.updateMatrix();
     this.bushM.setMatrixAt(p.i, o.matrix); this.bushM.instanceMatrix.needsUpdate = true;
   }
   hidePlant(p) {
@@ -214,7 +218,8 @@ export class World {
   }
   spawnCarcass(x, z, scale) { this.spawnMeat(x, z, 0.7 + scale * 0.9, 4, false); }
 
-  update(dt) {
+  update(dt, time) {
+    this.glowMat.color.setScalar(0.85 + 0.15 * Math.sin(time * 3));
     for (const p of this.plants) if (!p.active && (p.t -= dt) <= 0) this.placePlant(p);
     this.naturalTimer -= dt;
     if (this.naturalTimer <= 0) {
@@ -227,12 +232,12 @@ export class World {
   // Съесть ближайшую подходящую еду. Возвращает 'plant' | 'meat' | null
   tryEat(diet, x, z, r) {
     if (diet === 'herb') {
-      for (const p of this.plants) if (p.active && Math.hypot(p.x - x, p.z - z) < r + 1.2) { this.hidePlant(p); return 'plant'; }
+      for (const p of this.plants) if (p.active && Math.hypot(p.x - x, p.z - z) < r + 1.2) { this.hidePlant(p); return 'crystal'; }
     } else {
       for (const m of this.meats) if (m.active && Math.hypot(m.x - x, m.z - z) < r + 1.2 * m.s) {
         if (--m.bites <= 0) { m.active = false; m.mesh.visible = false; }
         else m.mesh.scale.setScalar(m.s * (0.6 + 0.1 * m.bites));
-        return 'meat';
+        return 'scrap';
       }
     }
     return null;
