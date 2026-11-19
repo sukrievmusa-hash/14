@@ -3,6 +3,8 @@ import { SPECIES, SP_KEYS, STAGES, buildDino, setFlash, growthScale, statMul, st
 import { World, height, inWater, MAP_R, WATER_Y } from './world.js';
 import { connect } from './net.js';
 import { sfx, initAudio } from './sfx.js';
+import { createFx } from './fx.js';
+import { animate, AN, hitTimes } from './anim.js';
 
 const $ = id => document.getElementById(id);
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -40,6 +42,7 @@ let life = 0, botN = 0, botTimer = 0, sendTimer = 0, hudTimer = 0, mapTimer = 0;
 let camYaw = 0, camPitch = 0.34, shake = 0, playing = false, lastCamInput = 0;
 let lifeStats = { start: 0, kills: 0, best: 0 };
 const NOW = () => performance.now();
+const DBG = { ts: 1, freeze: false, cam: null }; // для отладки: замедление времени, заморозка ботов, своя камера
 const BOT_NAMES = ['Клык', 'Шрам', 'Гроза', 'Тень', 'Коготь', 'Буря', 'Титан', 'Ржавый', 'Молния', 'Гром', 'Хищник', 'Рогач', 'Кочевник', 'Болт', 'Поршень', 'Вольт', 'Дизель', 'Сталь'];
 
 const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100;
@@ -72,16 +75,21 @@ function drawLabel(L, name, frac, stage, isBot) {
 class Mech {
   constructor(id, sp, name, o = {}) {
     this.id = id; this.sp = sp; this.S = SPECIES[sp]; this.name = name;
-    this.local = !!o.local; this.bot = !!o.bot; this.g = o.g ?? 0; this.kills = 0;
+    this.local = !!o.local; this.bot = !!o.bot; this.g = o.g ?? 0; this.kills = 0; this.preview = !!o.preview;
     this.m = buildDino(sp); scene.add(this.m.root);
     this.x = o.x || 0; this.z = o.z || 0; this.y = height(this.x, this.z); this.rot = o.rot || 0;
     this.tx = this.x; this.tz = this.z; this.trot = this.rot;
     this.hp = this.maxHp(); this.hpFrac = 1; this.st = 100;
-    this.atkT = 0; this.spT = 0; this.dashT = 0; this.dashHit = null; this.atkAnim = 0; this.atkFlagT = 0;
+    this.atkT = 0; this.spT = 0; this.ultCd = 0; this.ultT = 0; this.atkFlagT = 0; this.spFlagT = 0; this.ultFlagT = 0;
+    this.dashT = 0; this.dashHit = null;
     this.combatT = 0; this.protUntil = o.local && !o.bot ? NOW() + 3000 : 0; this.eatT = 0; this.flashT = 0;
-    this.moving = false; this.sprint = false; this.walk = 0; this.amp = 0; this.seed = Math.random() * 10;
-    this.lastSeen = NOW(); this.peer = null; this.lastAtkFlag = 0; this.lastSpFlag = 0;
-    this.stunT = 0; this.slowT = 0; this.shieldT = 0; this.stunImm = 0; this.kvx = 0; this.kvz = 0; this.combo = 0; this.spFlagT = 0; this.ringT = 0; this.step = 0; this.chainT = 0; this.lastStep = 0; this.curMove = null; this.ultCd = 0; this.ultT = 0; this.ultFlagT = 0; this.lastUltFlag = 0; this.stormT = 0; this.stormTick = 0; this.stormLeft = 0; this.stormVis = 0; this.stormVT = 0; this.spinVis = 0; this.spinDur = 1; this.spinTurns = 1; this.sawMove = null; this.tailMove = null; this.latch = null; this.sawT = 0; this.sawTick = 0; this.sawVis = 0; this.tailT = 0; this.hopT = 0; this.clung = false; this.vsp = 0; this.dir = 1; this.wasLatch = false; this.phase = ''; this.hits = 0; this.orbit = 1; this.orbitT = 2; this.home = null;
+    this.moving = false; this.sprint = false; this.vsp = 0; this.seed = Math.random() * 10;
+    this.lastSeen = NOW(); this.peer = null; this.lastAtkFlag = 0; this.lastSpFlag = 0; this.lastUltFlag = 0;
+    this.stunT = 0; this.slowT = 0; this.shieldT = 0; this.stunImm = 0; this.kvx = 0; this.kvz = 0;
+    this.act = null; this.dir = 1; this.stepF = 0; this.stepR = 0; this.chainT = 0; this.lastMv = 0; this.queued = false; this.combo = 0;
+    this.react = 0; this.reactSide = 0; this.leap = null; this.leapH = 0; this.leapPeak = 1; this.rideUp = null; this.rideHost = null; this.dropH = 0;
+    this.latch = null; this.clung = false; this.storm = null; this.ringT = 0;
+    this.phase = ''; this.phaseT = 0; this.hits = 0; this.orbit = 1; this.orbitT = 2; this.home = null;
     this.label = o.self || o.preview ? null : makeLabel();
     this.think = 0; this.wx = this.x; this.wz = this.z; this.target = null; this.flee = false; this.aggro = null;
   }
@@ -95,69 +103,43 @@ class Mech {
   speed(run) { return (run ? this.S.run : this.S.spd) * (0.8 + 0.3 * Math.min(this.g, 1)) * (inWater(this.x, this.z) && this.sp !== 'spino' ? 0.6 : 1) * (this.slowT > 0 ? 0.55 : 1) * (this.boost() ? 1.15 : 1); }
   setGrowth(g) { const f = this.hp / this.maxHp(); this.g = Math.min(1, g); this.hp = f * this.maxHp(); }
   flash() { this.flashT = 0.09; }
+  // идёт замах или удар (новый удар начинать нельзя)
+  busy() { const A = this.act; if (!A) return false; const an = AN[A.an]; return A.t < an.w + an.s + (A.hold || 0); }
   visual(dt, time) {
-    const m = this.m, s = this.scale;
     this.y = height(this.x, this.z);
-    let up = 0;
-    if (this.hopT > 0) { this.hopT -= dt; const sp = this.S.special; up += Math.sin(Math.PI * Math.max(0, 1 - this.hopT / sp.dur)) * sp.hop * s; }
-    if (this.local ? !!(this.latch && this.latch.kind === 'cling') : this.clung) up += 2.2;
-    m.root.position.set(this.x, Math.max(this.y, WATER_Y - 1.2 * s) + up, this.z);
-    m.root.rotation.y = this.rot;
-    m.root.scale.setScalar(s);
-    const target = this.moving ? (this.sprint ? 0.7 : 0.48) : 0;
-    this.amp += (target - this.amp) * Math.min(1, dt * 8);
-    this.walk += dt * (this.sprint ? 12 : 8) / Math.sqrt(s * this.S.cam + 0.2) * (this.moving ? 1 : 0.15);
-    for (const L of m.legs) L.pivot.rotation.x = Math.sin(this.walk + L.ph) * this.amp;
-    m.tail.rotation.y = Math.sin(time * 1.5 + this.seed) * 0.08 + Math.sin(this.walk * 0.5) * 0.2 * this.amp;
-    // механическая походка: корпус чуть качается
-    m.body.position.y = Math.abs(Math.sin(this.walk)) * 0.1 * this.amp;
-    m.body.rotation.z = Math.sin(this.walk) * 0.04 * this.amp;
-    // у каждого робота и у каждого удара серии своя анимация
-    const mv = this.curMove || this.S.moves[0], anim = mv.anim;
-    m.body.rotation.x = 0; m.body.rotation.y = 0; m.body.position.z = 0;
-    let tYaw = 0, tPitch = 0;
-    if (this.atkAnim > 0) {
-      this.atkAnim = Math.max(0, this.atkAnim - dt * (mv.as || 3));
-      const u = 1 - this.atkAnim, k = Math.sin(u * Math.PI), sd = this.dir;
-      if (anim === 'bite') { m.head.rotation.x = k * 0.5; m.head.position.z = m.headZ + k * 0.6; m.body.rotation.x = k * 0.06; }
-      else if (anim === 'slap') { m.body.rotation.y = sd * k * 0.5; m.head.rotation.x = k * 0.2; m.head.position.z = m.headZ + k * 0.3; }
-      else if (anim === 'ram') { m.head.rotation.x = k * 0.6; m.head.position.z = m.headZ + k * 0.7; m.body.position.z = k * 0.8; m.body.rotation.x = k * 0.15; }
-      else if (anim === 'claw') { m.head.rotation.x = k * 0.3; m.head.position.z = m.headZ + k * 0.5; m.body.rotation.y = sd * k * 0.45; }
-      else if (anim === 'gore') { m.head.rotation.x = k * 0.8; m.head.position.z = m.headZ + k * 0.9; m.body.position.z = k * 0.5; m.body.rotation.x = k * 0.1; }
-      else if (anim === 'uppercut') { m.head.rotation.x = -k * 0.7; m.head.position.z = m.headZ + k * 0.5; m.body.rotation.x = -k * 0.08; }
-      else if (anim === 'tail') { // хвост поднимается над землёй, затем хлёст вниз-в сторону (не проходит сквозь корпус)
-        tPitch = u < 0.5 ? 0.9 * Math.sin(u / 0.5 * Math.PI / 2) : Math.max(0, 0.9 * (1 - (u - 0.5) / 0.4));
-        tYaw = u > 0.45 ? Math.sin(Math.min(1, (u - 0.45) / 0.55) * Math.PI) * 0.9 * sd : 0;
-        m.head.rotation.x = 0; m.head.position.z = m.headZ;
-      } else if (anim === 'tailside') { tYaw = (u - 0.5) * 2.2 * sd; tPitch = 0.2 * k; m.head.rotation.x = 0; m.head.position.z = m.headZ; }
-      else if (anim === 'spikes') { m.body.rotation.x = -k * 0.1; m.head.rotation.x = -k * 0.2; }
-      else if (anim === 'shock') { m.body.rotation.x = k * 0.06; m.head.rotation.x = -k * 0.15; }
-      else { m.head.rotation.x = k * 0.2; m.head.position.z = m.headZ + k * 0.3; }
-    } else {
-      // робот: голова сканирует местность рывками, как сервопривод
-      const st = Math.round(Math.sin(time * 0.5 + this.seed) * 2) / 2;
-      m.head.rotation.y += (st * 0.4 - m.head.rotation.y) * Math.min(1, dt * 10);
-      m.head.rotation.x = Math.round(Math.sin(time * 0.9 + this.seed) * 3) / 3 * 0.05; m.head.position.z = m.headZ;
+    // наездник: раптор сидит точно на спине того, в кого вцепился (и у себя, и у других игроков)
+    const prevRide = this.rideUp;
+    this.rideUp = null;
+    const host = this.local ? (this.latch && this.latch.kind === 'cling' ? ents.get(this.latch.id) : null) : (this.clung ? findHost(this) : null);
+    if (host && !host.dead) {
+      const R = host.S.ride, hs = host.scale;
+      this.x = host.x + Math.sin(host.rot) * R[0] * hs; this.z = host.z + Math.cos(host.rot) * R[0] * hs; this.rot = host.rot;
+      this.y = height(this.x, this.z);
+      this.rideUp = Math.max(0, host.m.root.position.y + (R[1] + host.m.body.position.y) * hs - Math.max(this.y, WATER_Y - 1.2 * this.scale));
+    } else if (!this.local && prevRide != null) this.dropH = prevRide;
+    if (this.local) { this.leapH = this.leap ? this.leap.h : 0; if (this.leap) this.leapPeak = this.leap.H + this.leap.h0; }
+    else {
+      this.leapH = 0;
+      if (!host && this.act && this.act.an === 'leap') {
+        const an = AN.leap, u = (this.act.t - an.w) / an.s;
+        if (u > 0 && u < 1) { this.leapH = 4 * u * (1 - u) * 2.6 * this.scale; this.leapPeak = 2.6 * this.scale; }
+      }
+      if (this.dropH > 0) { this.dropH = Math.max(0, this.dropH - dt * 10); this.leapH = Math.max(this.leapH, this.dropH); }
+      if (this.storm) stormTick(this, dt);
     }
-    if (this.spinVis > 0) { // вращение всем корпусом: хвост-пила и веер клинков (хвост не проходит сквозь тело)
-      this.spinVis -= dt;
-      const u = 1 - Math.max(0, this.spinVis) / this.spinDur;
-      m.root.rotation.y = this.rot + u * Math.PI * 2 * this.spinTurns;
-    }
-    if (this.stormVis > 0 && !this.local) { this.stormVis -= dt; this.stormVT -= dt; if (this.stormVT <= 0) { this.stormVT += this.S.ult.dur / this.S.ult.strikes; stormStrike(this, false); } }
-    m.tail.rotation.y += tYaw; m.tail.rotation.x = tPitch;
-    if (this.stunT > 0) m.head.rotation.z = Math.sin(time * 40) * 0.12; else m.head.rotation.z = 0;
+    animate(this, dt, time, HOOKS);
+    const s = this.scale;
     this.ringT -= dt;
     if (this.ringT <= 0) {
-      if (this.shieldT > 0) { this.ringT = 0.45; ring(this.x, this.y, this.z, this.radius() * 1.5, '#66ccff'); }
-      else if (this.over() || this.boost()) { this.ringT = 0.3; sparks(this.x, this.y + this.S.h * s * 0.7, this.z, 0.5, 2); }
-      else if (this.stunT > 0) { this.ringT = 0.15; sparks(this.x, this.y + this.S.h * s, this.z, 0.5, 2); }
+      if (this.shieldT > 0) { this.ringT = 0.45; ring(this.x, this.y, this.z, this.radius() * 1.6, '#66ccff'); }
+      else if (this.over() || this.boost()) { this.ringT = 0.25; fx.steam(this.x - Math.sin(this.rot) * this.radius() * 0.6, this.y + this.S.h * 0.8 * s, this.z - Math.cos(this.rot) * this.radius() * 0.6, 0.6 * s, 1, 3); }
+      else if (this.stunT > 0) { this.ringT = 0.12; sparks(this.x, this.y + this.S.h * s, this.z, 0.5, 2); bolt(this.x, this.y + this.S.h * 0.9 * s, this.z, this.x + (Math.random() - 0.5) * 2 * s, this.y + this.S.h * 0.5 * s, this.z + (Math.random() - 0.5) * 2 * s, '#bfe9ff', 2, 0.4); }
     }
-    if (this.flashT > 0) { this.flashT -= dt; setFlash(m, this.flashT > 0); }
+    if (this.flashT > 0) { this.flashT -= dt; setFlash(this.m, this.flashT > 0); }
     if (this.label) {
       const L = this.label;
       drawLabel(L, this.name, this.frac(), stageIndex(this.g), this.bot);
-      L.sp.position.set(this.x, this.y + (this.S.h + 0.6) * s + 0.6, this.z);
+      L.sp.position.set(this.x, this.m.root.position.y + (this.S.h + 0.6) * s + 0.6, this.z);
       const d = camera.position.distanceTo(L.sp.position);
       const k = Math.max(1, d * 0.05);
       L.sp.scale.set(3.6 * k, 0.9 * k, 1);
@@ -168,63 +150,31 @@ class Mech {
     if (this.label) { scene.remove(this.label.sp); this.label.tex.dispose(); this.label.sp.material.dispose(); }
   }
 }
+// у кого на спине сидит чужой раптор
+function findHost(e) {
+  const h = e.rideHost && ents.get(e.rideHost);
+  if (h && !h.dead && Math.hypot(h.x - e.x, h.z - e.z) < h.radius() * 2.5 + 3) return h;
+  let best = null, bd = 1e9;
+  for (const o of ents.values()) { if (o === e || o.dead) continue; const d = Math.hypot(o.x - e.x, o.z - e.z) - o.radius(); if (d < bd) { bd = d; best = o; } }
+  if (best && bd < 3) { e.rideHost = best.id; return best; }
+  return null;
+}
 
-// ================= Эффекты: искры, кольца, цифры урона =================
-const fxGeo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
-const sparkMat = new THREE.MeshBasicMaterial({ color: 0xffc23a });
-const fx = [];
-for (let i = 0; i < 60; i++) { const m = new THREE.Mesh(fxGeo, sparkMat); m.visible = false; scene.add(m); fx.push({ m, life: 0, vx: 0, vy: 0, vz: 0, g: 20 }); }
-let fxI = 0;
-function sparks(x, y, z, s = 1, n = 8, up = 1) {
-  for (let i = 0; i < n; i++) {
-    const p = fx[fxI++ % fx.length];
-    p.life = 0.5 + Math.random() * 0.2; p.m.visible = true; p.m.position.set(x, Math.max(y, height(x, z) + 0.25), z); p.m.scale.setScalar(s * (0.6 + Math.random() * 0.6));
-    p.vx = (Math.random() - 0.5) * 10 * s; p.vy = (2 + Math.random() * 7) * s * up; p.vz = (Math.random() - 0.5) * 10 * s; p.g = 22;
-  }
-}
-const boltGeo = new THREE.BoxGeometry(0.14, 0.14, 1).translate(0, 0, 0.5);
-const bolts = [];
-for (let i = 0; i < 48; i++) { const m = new THREE.Mesh(boltGeo, new THREE.MeshBasicMaterial({ color: 0x7af6ff })); m.visible = false; scene.add(m); bolts.push({ m, life: 0 }); }
-let boltI = 0;
-const _b1 = new THREE.Vector3(), _b2 = new THREE.Vector3();
-function bolt(x1, y1, z1, x2, y2, z2, color = '#7af6ff') {
-  let px = x1, py = y1, pz = z1;
-  for (let i = 1; i <= 3; i++) {
-    const k = i / 3, j = i < 3 ? 0.7 : 0;
-    const nx = x1 + (x2 - x1) * k + (Math.random() - 0.5) * j, ny = y1 + (y2 - y1) * k + (Math.random() - 0.5) * j, nz = z1 + (z2 - z1) * k + (Math.random() - 0.5) * j;
-    const b = bolts[boltI++ % bolts.length];
-    b.life = 0.16; b.m.visible = true; b.m.material.color.set(color);
-    b.m.position.set(px, py, pz); _b2.set(nx, ny, nz); b.m.lookAt(_b2); b.m.scale.z = Math.max(0.1, _b1.set(nx - px, ny - py, nz - pz).length());
-    px = nx; py = ny; pz = nz;
-  }
-}
-const ringGeo = new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2);
-const rings = [];
-for (let i = 0; i < 6; i++) {
-  const m = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
-  m.visible = false; scene.add(m); rings.push({ m, life: 0, R: 1 });
-}
-let ringI = 0;
-function ring(x, y, z, R, color) {
-  const r = rings[ringI++ % rings.length];
-  r.life = 0.45; r.R = R; r.m.visible = true; r.m.position.set(x, Math.max(y, height(x, z)) + 0.5, z); r.m.material.color.set(color);
-}
-function updateFx(dt) {
-  for (const p of fx) {
-    if (p.life <= 0) continue;
-    p.life -= dt; p.vy -= p.g * dt;
-    p.m.position.x += p.vx * dt; p.m.position.y += p.vy * dt; p.m.position.z += p.vz * dt;
-    p.m.rotation.x += dt * 8;
-    if (p.life <= 0) p.m.visible = false;
-  }
-  for (const b of bolts) { if (b.life <= 0) continue; b.life -= dt; if (b.life <= 0) b.m.visible = false; }
-  for (const r of rings) {
-    if (r.life <= 0) continue;
-    r.life -= dt; const k = 1 - r.life / 0.45;
-    r.m.scale.setScalar(0.3 * r.R + k * r.R); r.m.material.opacity = 1 - k;
-    if (r.life <= 0) r.m.visible = false;
-  }
-}
+// ================= Эффекты =================
+const fx = createFx(scene, camera, height);
+const sparks = fx.sparks, ring = fx.ring, bolt = fx.bolt;
+const _wp = new THREE.Vector3();
+const camD = (x, z) => Math.hypot(camera.position.x - x, camera.position.z - z);
+// громкость звука робота: свой — полная, чужие — по расстоянию до камеры, превью в меню — без звука
+const volAt = e => (e === me ? 1 : e.preview ? 0 : Math.max(0, 1 - camD(e.x, e.z) / 45) * 0.8);
+let camBump = 0, hitStop = 0;
+const HOOKS = {
+  step: (e, L) => footstep(e, L),
+  strike: (e, A) => strikeFx(e, A),
+  wind: (e, A, dt) => windFx(e, A, dt),
+  loop: (e, A, dt) => loopFx(e, A, dt),
+};
+
 // Цифры урона: пул DOM-элементов, проецируем 3D-точку на экран
 const nums = [];
 for (let i = 0; i < 14; i++) { const el = document.createElement('div'); el.className = 'dmg'; $('nums').appendChild(el); nums.push({ el, life: 0, p: new THREE.Vector3() }); }
@@ -260,37 +210,148 @@ function nearestInFront(a, reach, cone = 1.1, back = false) {
   }
   return best;
 }
-// Автонаведение: если впереди никого, но враг рядом — разворачиваемся к нему
-function autoAim(a, reach, mv) {
-  if (mv && (mv.type === 'ring' || mv.type === 'saw')) return;
-  const rear = !!mv && mv.type === 'tail';
-  if (rear ? nearestInFront(a, reach, mv.arc, true) : nearestInFront(a, reach, mv && mv.cone || 1.1)) return;
+// Автонаведение: если впереди (или сзади для удара хвостом) никого, а враг рядом — доворачиваем.
+// Тяжёлые роботы доворачивают немного — их нельзя мгновенно развернуть.
+function autoAim(a, reach, mv, rear) {
+  if (mv.area === 'around') return;
+  if (nearestInFront(a, reach, rear ? mv.arc : (mv.cone || 1.1), rear)) return;
   const t = nearestInFront(a, reach * 1.25, Math.PI);
   if (!t) return;
-  // тяжёлые роботы разворачиваются медленно — автонаведение их не телепортирует
   const want = Math.atan2(t.x - a.x, t.z - a.z) + (rear ? Math.PI : 0), lim = a.S.turn * 0.4;
   a.rot += Math.max(-lim, Math.min(lim, angDiff(a.rot, want)));
 }
 
-function dealDamage(a, t, amount, f) {
+const bodyPt = a => [a.x, (a.m ? a.m.root.position.y : a.y) + a.S.h * 0.55 * a.scale, a.z];
+const nearEnemies = (a, R) => { const r = []; for (const e of ents.values()) if (e !== a && !e.dead && Math.hypot(e.x - a.x, e.z - a.z) - e.radius() < R) r.push(e); return r; };
+const rangeOf = (a, mv) => a.S.reach * a.scale * (mv.reach || 1);
+const jit = (k = 0.8) => (Math.random() - 0.5) * k;
+function hitSound(snd, v) { if (v < 0.03) return; (sfx[snd] || sfx.clank)(v); if (snd && snd !== 'clank') sfx.clank(v * 0.35); }
+
+function dealDamage(a, t, amount, f, mv) {
   if (!t || t.dead) return;
   amount = Math.round(amount);
-  const hy = t.y + t.S.h * 0.55 * t.scale;
-  sparks(t.x, hy, t.z, Math.max(0.6, t.scale));
+  const hy = t.m.root.position.y + t.S.h * 0.55 * t.scale;
+  // точка попадания — на стороне цели, обращённой к атакующему
+  const dx = a.x - t.x, dz = a.z - t.z, dd = Math.hypot(dx, dz) || 1, hr = t.radius() * 0.7;
+  const hx = t.x + dx / dd * hr, hz = t.z + dz / dd * hr;
+  if (a === me || t === me || camD(t.x, t.z) < 50) { sparks(hx, hy, hz, Math.max(0.6, t.scale), 7); fx.flash(hx, hy, hz, 0.5 + t.scale * 0.5, a.S.glow); }
   t.flash();
+  t.react = Math.min(1, 0.6 + amount / Math.max(1, t.maxHp()) * 4);
+  t.reactSide = Math.sign(angDiff(t.rot, Math.atan2(dx, dz))) || 1;
   a.combatT = 6;
-  if (a === me) { dmgNum(t.x, hy + 1, t.z, amount, true); sfx.clank(1); }
+  if (a === me) {
+    dmgNum(t.x, hy + 1, t.z, amount, true);
+    hitSound(mv && mv.snd, 1);
+    hitStop = Math.max(hitStop, (mv && mv.stop) || 0.04);
+    shake = Math.max(shake, mv && mv.stop ? 0.22 : 0.08);
+  } else hitSound(mv && mv.snd, volAt(a) * 0.7);
   if (t.local) applyDamage(t, amount, a.id, a.name, f);
   else if (net && t.peer) net.hit(t.peer, f ? { t: t.id, d: amount, b: a.id, n: a.name, f } : { t: t.id, d: amount, b: a.id, n: a.name });
 }
 
-const bodyPt = a => [a.x, a.y + a.S.h * 0.65 * a.scale, a.z];
-const nearEnemies = (a, R) => { const r = []; for (const e of ents.values()) if (e !== a && !e.dead && Math.hypot(e.x - a.x, e.z - a.z) - e.radius() < R) r.push(e); return r; };
+// Кого задевает удар (проверяется в момент удара — от замаха можно увернуться)
+function targetsFor(a, mv) {
+  const R = rangeOf(a, mv), out = [];
+  if (mv.area === 'front') { const t = nearestInFront(a, R, mv.cone || 1.1); return t ? [t] : out; }
+  let cx = a.x, cz = a.z;
+  if (mv.area === 'spot') { cx += Math.sin(a.rot) * R * mv.at; cz += Math.cos(a.rot) * R * mv.at; }
+  for (const e of ents.values()) {
+    if (e === a || e.dead) continue;
+    const dx = e.x - cx, dz = e.z - cz, d = Math.hypot(dx, dz) - e.radius();
+    if (mv.area === 'spot') { if (d < mv.rad * a.scale) out.push(e); continue; }
+    if (d > R) continue;
+    if (mv.area === 'around') { out.push(e); continue; }
+    const back = mv.area === 'rear', lim = back ? mv.arc : (mv.cone || 1.1);
+    if (Math.abs(angDiff(a.rot + (back ? Math.PI : 0), Math.atan2(dx, dz))) <= lim || d < a.radius() * 0.3) out.push(e);
+  }
+  return out;
+}
 
-const rangeOf = (a, mv) => a.S.reach * a.scale * (mv.reach || 1);
-const jit = () => (Math.random() - 0.5) * 0.8;
+// Враг сзади и близко — следующий удар будет хвостом назад; иначе — серия вперёд
+function chainOf(a) {
+  const S = a.S; if (!S.rear.length) return 'F';
+  const rr = Math.max(...S.rear.map(m => rangeOf(a, m)));
+  let best = null, bd = 1e9;
+  for (const e of ents.values()) { if (e === a || e.dead) continue; const d = Math.hypot(e.x - a.x, e.z - a.z) - e.radius(); if (d < bd) { bd = d; best = e; } }
+  if (!best || bd > rr * 1.15) return 'F';
+  return Math.abs(angDiff(a.rot, Math.atan2(best.x - a.x, best.z - a.z))) > 1.75 ? 'R' : 'F';
+}
+function nextMove(a) {
+  const ch = chainOf(a), list = ch === 'R' ? a.S.rear : a.S.front;
+  const i = a.chainT > 0 ? (ch === 'R' ? a.stepR : a.stepF) % list.length : 0;
+  return { mv: list[i], ch, i };
+}
+function startAct(a, an, extra) { a.act = Object.assign({ an, t: 0, fx: false, hi: 0, hold: 0 }, extra); }
 
-// Залп: самонаводящиеся выстрелы по ближайшим врагам (dry = только эффект, без урона — для чужих игроков)
+function attack(a, special) {
+  if (!a || a.dead || a.stunT > 0 || a.leap) return;
+  if (a.latch) { if (special && a.latch.kind === 'cling') dismount(a); return; } // повторный «Спец» — спрыгнуть со спины
+  const S = a.S;
+  if (!special) {
+    if (a.atkT > 0 || a.busy()) { if (a === me && a.atkT < 0.3) a.queued = true; return; } // нажатие заранее запоминается
+    const { mv, ch, i } = nextMove(a);
+    if (a === me) autoAim(a, rangeOf(a, mv), mv, ch === 'R');
+    if (ch === 'R') a.stepR = i + 1; else a.stepF = i + 1;
+    a.chainT = 1.8;
+    a.atkT = mv.cd * (a.over() || a.boost() ? 0.78 : 1); a.atkFlagT = 0.3;
+    a.dir = mv.side || -a.dir; a.lastMv = S.all.indexOf(mv);
+    startAct(a, mv.anim, { mv, hits: hitTimes(AN[mv.anim]) });
+    const v = volAt(a); if (v > 0.05) sfx.servo(a.sp === 'raptor' ? 1.6 : 1, v);
+    return;
+  }
+  if (a.spT > 0 || a.busy()) return;
+  const sp = S.special;
+  if (a === me && sp.type !== 'area') autoAim(a, (sp.range || S.reach) * a.scale, { cone: sp.type === 'leap' ? 0.6 : 1.1 });
+  a.spT = sp.cd; a.spFlagT = 0.4;
+  startAct(a, sp.anim, { sp: true });
+  const v = volAt(a); if (v > 0.05) sfx.roar(a.sp === 'raptor' ? 1.8 : 1, v * 0.7);
+}
+
+function ultimate(a) {
+  if (!a || a.dead || a.stunT > 0 || a.latch || a.leap || a.ultCd > 0 || a.busy()) return;
+  const U = a.S.ult;
+  a.ultCd = U.cd; a.ultFlagT = 0.5;
+  startAct(a, U.anim, { ult: true });
+  const v = volAt(a); if (v > 0.05) sfx.roar(0.7, v);
+  if (a === me) toast(`${U.name}!`);
+}
+
+// Ход атаки у владельца робота: урон — строго в момент удара по анимации
+function tickAttacks(d, dt) {
+  const A = d.act;
+  if (A) {
+    const an = AN[A.an];
+    A.t += dt;
+    if (d.stunT > 0 && A.t < an.w + an.s) d.act = null; // оглушение сбивает замах
+    else if (A.mv) {
+      if (A.mv.lunge && !A.lunged && A.t >= an.w) { A.lunged = true; d.kvx += Math.sin(d.rot) * A.mv.lunge; d.kvz += Math.cos(d.rot) * A.mv.lunge; } // шаг в удар
+      while (A.hi < A.hits.length && A.t >= A.hits[A.hi]) resolveMove(d, A.mv, A.hi++);
+    } else if (!A.done && A.t >= an.h) { A.done = true; if (A.sp) resolveSpecial(d, A); else if (A.ult) resolveUlt(d); }
+  }
+  if (d.queued && d.atkT <= 0 && !d.busy()) { d.queued = false; attack(d, false); }
+  if (d.storm) stormTick(d, dt);
+  const L = d.latch;
+  if (L) { // захват: Рекс держит челюстями, Раптор рубит со спины
+    L.t -= dt; L.acc -= dt;
+    const t = ents.get(L.id);
+    if (!t || t.dead || d.stunT > 0) endLatch(d);
+    else {
+      if (L.acc <= 0) {
+        L.acc += L.tick;
+        if (L.kind === 'cling') { const mv = d.S.front[d.combo++ % 2]; d.dir = mv.side; d.lastMv = d.S.all.indexOf(mv); d.atkFlagT = 0.25; startAct(d, mv.anim, { mv, hits: [] }); }
+        dealDamage(d, t, d.dmg() * L.mult, L.fx || null, { snd: L.kind === 'cling' ? 'slash' : 'crunch' });
+      }
+      if (d.latch && L.t <= 0) endLatch(d);
+    }
+  }
+}
+
+function resolveMove(a, mv) {
+  if (mv.area === 'proj') { volley(a, mv); return; }
+  for (const t of targetsFor(a, mv)) dealDamage(a, t, a.dmg() * mv.dmg, mv.fx || null, mv);
+}
+
+// Снаряды (шипы, ракеты): летят по дуге, урон — когда долетели. dry — только картинка (чужой игрок)
 function volley(a, o, dry) {
   const R = o.range * a.scale, list = [];
   for (const e of ents.values()) {
@@ -301,193 +362,225 @@ function volley(a, o, dry) {
     list.push([d, e]);
   }
   list.sort((p, q) => p[0] - q[0]);
-  const vis = camera.position.distanceTo(a.m.root.position) < 60;
   const targets = list.slice(0, o.targets || 3).map(p => p[1]);
+  if (camD(a.x, a.z) > 70) { if (!dry) for (let i = 0; i < o.count && targets.length; i++) { const e = targets[i % targets.length]; dealDamage(a, e, a.dmg() * o.dmg, o.fx || null, { snd: 'clank' }); } return; }
+  const s = a.scale, ry = a.m.root.position.y, sx = a.x - Math.sin(a.rot) * (o.back ? 0.4 : -0.3) * s, sz = a.z - Math.cos(a.rot) * (o.back ? 0.4 : -0.3) * s;
+  const sy = ry + a.S.h * (o.back ? 0.62 : 0.8) * s;
+  const v = volAt(a); if (v > 0.03) (o.snd === 'rocket' ? sfx.rocket : sfx.shoot)(v);
   if (!targets.length) {
-    if (vis) for (let i = 0; i < Math.min(3, o.count); i++) bolt(...bodyPt(a), a.x + Math.sin(a.rot + (i - 1) * 0.2) * R * 0.7, a.y + a.S.h * 0.5 * a.scale, a.z + Math.cos(a.rot + (i - 1) * 0.2) * R * 0.7, o.color);
-    return false;
+    for (let i = 0; i < Math.min(3, o.count); i++) {
+      const an = a.rot + (i - 1) * 0.25, px = a.x + Math.sin(an) * R * 0.8, pz = a.z + Math.cos(an) * R * 0.8, py = height(px, pz) + 0.3;
+      fx.proj({ x: sx, y: sy, z: sz, to: () => [px, py, pz], T: (o.T || 0.3) + i * (o.stagger || 0.04), arc: o.arc ?? 1, color: o.color, smoke: o.smoke, s, onHit: () => fx.dust(px, py, pz, s * 0.6, 3) });
+    }
+    return;
   }
   for (let i = 0; i < o.count; i++) {
     const e = targets[i % targets.length];
-    if (!dry) dealDamage(a, e, a.dmg() * o.dmg, o.fx || null);
-    if (vis) bolt(...bodyPt(a), e.x + jit(), e.y + e.S.h * 0.55 * e.scale + jit(), e.z + jit(), o.color);
+    const side = jit(o.spread || 1.5) * s;
+    fx.proj({ x: sx + jit(0.4), y: sy, z: sz + jit(0.4), to: () => bodyPt(e), T: (o.T || 0.3) + i * (o.stagger || 0.04), arc: (o.arc ?? 1) * s, side, color: o.color, smoke: o.smoke, s,
+      onHit: () => {
+        if (!dry && !e.dead && ents.has(e.id)) dealDamage(a, e, a.dmg() * o.dmg, o.fx || null, { snd: 'clank' });
+        else { const p = bodyPt(e); sparks(p[0], p[1], p[2], 0.6, 4); }
+      } });
   }
+}
+const rocketsOf = a => { const U = a.S.ult; return { count: U.count, range: U.range, cone: Math.PI, dmg: U.dmg, targets: 3, color: '#ffb03a', smoke: true, arc: 6, spread: 6, T: 0.65, stagger: 0.08, back: true, snd: 'rocket' }; };
+
+// Шипы веером во все стороны (Стего): по врагам — с уроном, остальные — для красоты
+function quills(a, dry) {
+  const sp = a.S.special, R = sp.radius * a.scale, s = a.scale, ry = a.m.root.position.y + a.S.h * 0.75 * s;
+  const vis = camD(a.x, a.z) < 70;
+  const hit = nearEnemies(a, R);
+  for (const e of hit) {
+    if (vis) fx.proj({ x: a.x, y: ry, z: a.z, to: () => bodyPt(e), T: 0.2, arc: 0.5 * s, color: a.S.glow, s, onHit: () => { if (!dry && !e.dead && ents.has(e.id)) dealDamage(a, e, a.dmg() * sp.mult, sp.fx, { snd: 'clank' }); } });
+    else if (!dry) dealDamage(a, e, a.dmg() * sp.mult, sp.fx, { snd: 'clank' });
+  }
+  if (vis) for (let i = 0; i < 10; i++) {
+    const an = i * 0.628 + Math.random() * 0.2, px = a.x + Math.sin(an) * R, pz = a.z + Math.cos(an) * R, py = height(px, pz) + 0.3;
+    fx.proj({ x: a.x, y: ry, z: a.z, to: () => [px, py, pz], T: 0.22, arc: 0.8 * s, color: a.S.glow, s, onHit: () => fx.dust(px, py, pz, s * 0.5, 2) });
+  }
+}
+
+// Молния Спино: от головы к цели и перескок на второго
+function arcBolt(a, dry) {
+  const sp = a.S.special, range = sp.range * a.scale;
+  const t = nearestInFront(a, range, 0.5);
+  a.m.head.getWorldPosition(_wp);
+  const hx = _wp.x, hy = _wp.y, hz = _wp.z;
+  if (!t) { bolt(hx, hy, hz, a.x + Math.sin(a.rot) * range * 0.7, a.y + 1, a.z + Math.cos(a.rot) * range * 0.7, a.S.glow, 5, 1.2); return false; }
+  const p = bodyPt(t);
+  bolt(hx, hy, hz, ...p, '#ffffff', 5, 1.2); bolt(hx, hy, hz, ...p, a.S.glow, 5, 1.6);
+  fx.flash(...p, 1.2 * t.scale, '#bfe9ff');
+  if (!dry) dealDamage(a, t, a.dmg() * sp.mult, sp.fx, { snd: 'zap', stop: 0.06 });
+  let n2 = null, nd = 8 * a.scale;
+  for (const e of ents.values()) { if (e === a || e === t || e.dead) continue; const dd = Math.hypot(e.x - t.x, e.z - t.z); if (dd < nd) { nd = dd; n2 = e; } }
+  if (n2) { bolt(...p, ...bodyPt(n2), a.S.glow, 4, 1.2); if (!dry) dealDamage(a, n2, a.dmg() * sp.mult * 0.5, sp.fx, { snd: 'zap' }); }
   return true;
 }
 
-// Молния сверху по случайному врагу рядом (Грозовая буря)
-function stormStrike(a, real) {
-  const U = a.S.ult, R = U.range * a.scale, list = [];
-  for (const e of ents.values()) if (e !== a && !e.dead && Math.hypot(e.x - a.x, e.z - a.z) - e.radius() < R) list.push(e);
-  let x, z, y;
-  if (list.length) { const e = list[Math.floor(Math.random() * list.length)]; x = e.x; z = e.z; y = e.y + e.S.h * 0.5 * e.scale; if (real) dealDamage(a, e, a.dmg() * U.dmg, U.fx); }
-  else if (real) return;
-  else { const an = Math.random() * 6.28, r = 4 + Math.random() * 8; x = a.x + Math.sin(an) * r; z = a.z + Math.cos(an) * r; y = height(x, z) + 1; }
-  if (camera.position.distanceTo(a.m.root.position) < 70) { bolt(x + jit(), y + 16, z + jit(), x, y, z, '#ffffff'); ring(x, y - 1, z, 2.5, '#59a8ff'); }
-}
-
-// Удар из серии: у каждого свой тип
-function doMove(a, mv) {
-  const reach = rangeOf(a, mv), d = a.dmg();
-  a.curMove = mv;
-  if (mv.spin) { a.spinVis = a.spinDur = mv.spin; a.spinTurns = mv.turns || 2; }
-  if (mv.type === 'saw') { a.sawMove = mv; a.sawT = mv.spin; a.sawTick = mv.spin / mv.ticks * 0.5; a.sawLeft = mv.ticks; return; }     // хвост-пила
-  if (mv.type === 'tail') { a.tailMove = mv; a.tailT = mv.wind; return; }                                                              // хвост назад (удар придёт после замаха)
-  if (mv.type === 'volley') { volley(a, mv); return; }                                                                                 // залп шипов
-  if (mv.type === 'ring') {                                                                                                            // удар вокруг себя
-    for (const e of nearEnemies(a, reach * 0.95)) dealDamage(a, e, d * mv.dmg, mv.fx || null);
-    ring(a.x, a.y, a.z, reach * 0.95, a.S.glow);
-    return;
-  }
-  if (mv.lunge) { a.kvx += Math.sin(a.rot) * mv.lunge; a.kvz += Math.cos(a.rot) * mv.lunge; }                                         // рывок вперёд
-  const t = nearestInFront(a, reach, mv.cone || 1.1);
-  if (t) dealDamage(a, t, d * mv.dmg, mv.fx || null);
-  else if (a === me) sfx.clank(0.3);
-}
-
-// Отложенные и затяжные атаки (пила, хвост, захваты, буря) — считаются у владельца робота
-function tickAttacks(d, dt) {
-  if (d.sawT > 0) {
-    const A = d.sawMove;
-    d.sawT -= dt; d.sawTick -= dt;
-    if (A && d.sawTick <= 0 && d.sawLeft > 0) {
-      d.sawTick += A.spin / A.ticks; d.sawLeft--;
-      for (const e of nearEnemies(d, d.S.reach * d.scale * 0.9)) dealDamage(d, e, d.dmg() * A.dmg, { sl: 0.5 });
-      if (camera.position.distanceTo(d.m.root.position) < 50) sparks(d.x + Math.sin(d.rot + Math.PI) * 4 * d.scale, d.y + 1, d.z + Math.cos(d.rot + Math.PI) * 4 * d.scale, 0.8, 4);
-    }
-  }
-  if (d.tailT > 0) {
-    d.tailT -= dt;
-    if (d.tailT <= 0 && d.tailMove) { // хлёст хвостом назад
-      const A = d.tailMove, R = d.S.reach * d.scale * (A.reach || 1);
-      let hit = false;
-      for (const e of ents.values()) {
-        if (e === d || e.dead) continue;
-        const dx = e.x - d.x, dz = e.z - d.z, dist = Math.hypot(dx, dz) - e.radius();
-        if (dist > R) continue;
-        if (Math.abs(angDiff(d.rot + Math.PI, Math.atan2(dx, dz))) > A.arc && dist > d.radius() * 0.3) continue;
-        hit = true; dealDamage(d, e, d.dmg() * A.dmg, { kb: A.kb });
-      }
-      if (camera.position.distanceTo(d.m.root.position) < 50) {
-        ring(d.x - Math.sin(d.rot) * R * 0.6, d.y, d.z - Math.cos(d.rot) * R * 0.6, 2.2 * d.scale, d.S.glow);
-        if (d === me) { shake = Math.max(shake, hit ? 0.3 : 0.1); sfx.clank(hit ? 1 : 0.3); }
-      }
-    }
-  }
-  if (d.stormT > 0) { // Грозовая буря
-    const U = d.S.ult;
-    d.stormT -= dt; d.stormTick -= dt;
-    if (d.stormTick <= 0 && d.stormLeft > 0) { d.stormTick += U.dur / U.strikes; d.stormLeft--; stormStrike(d, true); }
-  }
-  const L = d.latch;
-  if (L) { // захват: Рекс держит челюстями, Раптор сидит на спине
-    L.t -= dt; L.acc -= dt;
-    const t = ents.get(L.id);
-    if (!t || t.dead) d.latch = null;
-    else {
-      if (L.acc <= 0) { L.acc += L.tick; d.atkAnim = 1; d.atkFlagT = 0.3; dealDamage(d, t, d.dmg() * L.mult, L.fx || null); }
-      if (L.t <= 0) d.latch = null;
-    }
-  }
-  if (d.wasLatch && !d.latch && d.sp === 'raptor') { d.kvx += -Math.sin(d.rot) * 6; d.kvz += -Math.cos(d.rot) * 6; } // спрыгивает
-  d.wasLatch = !!d.latch;
-}
-
-// Визуальный эффект спецприёма (виден и у чужих игроков)
-function specialFx(a) {
+function resolveSpecial(a, A) {
   const S = a.S, sp = S.special, reach = S.reach * a.scale;
-  if (camera.position.distanceTo(a.m.root.position) > 60) return;
-  if (sp.type === 'clamp') ring(a.x + Math.sin(a.rot) * reach * 0.7, a.y, a.z + Math.cos(a.rot) * reach * 0.7, 2.2 * a.scale, S.glow);
-  else if (sp.type === 'leap') { a.hopT = sp.dur; sparks(a.x, a.y + 0.3, a.z, 1, 8, 0.5); ring(a.x, a.y, a.z, 2.2, S.glow); }
-  else if (sp.type === 'bolt') {
-    const t = nearestInFront(a, sp.range * a.scale, 0.5);
-    if (t) {
-      bolt(...bodyPt(a), ...bodyPt(t));
-      let n2 = null, nd = 8 * a.scale;
-      for (const e of ents.values()) { if (e === a || e === t || e.dead) continue; const dd = Math.hypot(e.x - t.x, e.z - t.z); if (dd < nd) { nd = dd; n2 = e; } }
-      if (n2) bolt(...bodyPt(t), ...bodyPt(n2));
-    } else bolt(...bodyPt(a), a.x + Math.sin(a.rot) * sp.range * 0.6, a.y + a.S.h * 0.5 * a.scale, a.z + Math.cos(a.rot) * sp.range * 0.6);
-  } else if (sp.type === 'area') {
-    const R = sp.radius * a.scale;
-    ring(a.x, a.y, a.z, R, S.glow); ring(a.x, a.y + 0.3, a.z, R * 0.7, '#ffffff');
-    for (let i = 0; i < 8; i++) { const an = i * 0.785; sparks(a.x + Math.sin(an) * R * 0.6, a.y + 0.5, a.z + Math.cos(an) * R * 0.6, 0.7, 2, 0.6); }
-  }
-}
-
-// Эффект ультимейта; remote = чужой игрок (урон уже посчитал он сам)
-function ultFx(a, remote) {
-  const U = a.S.ult;
-  if (camera.position.distanceTo(a.m.root.position) > 70) return;
-  if (U.type === 'stomp') {
-    for (let i = 1; i <= 3; i++) ring(a.x, a.y, a.z, U.radius * a.scale * i / 3, i === 3 ? a.S.glow : '#ffffff');
-    for (let i = 0; i < 14; i++) { const an = i * 0.45; sparks(a.x + Math.sin(an) * U.radius * 0.7, a.y + 0.3, a.z + Math.cos(an) * U.radius * 0.7, 0.9, 2, 0.5); }
-    if (a === me || camera.position.distanceTo(a.m.root.position) < 30) shake = Math.max(shake, 0.5);
-  } else {
-    ring(a.x, a.y, a.z, 5 * a.scale, a.S.glow);
-    if (remote) {
-      if (U.type === 'barrage') volley(a, { count: U.count, range: U.range, cone: Math.PI, dmg: 0, targets: 3, color: '#ffb03a' }, true);
-      if (U.type === 'storm') { a.stormVis = U.dur; a.stormVT = 0.1; }
-    }
-  }
-}
-
-function attack(a, special) {
-  if (!a || a.dead || a.stunT > 0) return;
-  if (a.latch) { if (special && a.latch.kind === 'cling') { a.latch = null; a.spT = Math.max(a.spT, 1.5); } return; } // повторный «Спец» — спрыгнуть
-  const S = a.S;
-  if (!special) {
-    if (a.atkT > 0) return;
-    if (a.chainT <= 0) a.step = 0;
-    const step = a.step, mv = S.moves[step];
-    if (a === me) autoAim(a, rangeOf(a, mv), mv);
-    a.lastStep = step; a.step = (step + 1) % S.moves.length; a.chainT = mv.win || 1.7;
-    a.atkT = mv.cd * (a.over() || a.boost() ? 0.78 : 1); a.atkAnim = 1; a.atkFlagT = mv.type === 'saw' ? 0.8 : 0.3; a.dir = -a.dir;
-    doMove(a, mv);
-    return;
-  }
-  if (a.spT > 0) return;
-  const reach = S.reach * a.scale, sp = S.special, range = (sp.range || S.reach) * a.scale;
-  if (a === me && sp.type !== 'area') autoAim(a, range);
-  a.spT = sp.cd; a.atkAnim = 1; a.atkFlagT = 0.4; a.spFlagT = 0.4;
-  const near = a === me || camera.position.distanceTo(a.m.root.position) < 45;
-  if (near) sfx.roar(a.sp === 'raptor' ? 1.8 : 1, a === me ? 1 : 0.45);
-  let miss = false;
   if (sp.type === 'clamp') {
     const t = nearestInFront(a, reach * 1.15, 1.3);
     if (t) {
-      dealDamage(a, t, a.dmg() * sp.mult, { s: sp.dur });
+      dealDamage(a, t, a.dmg() * sp.mult, { s: sp.dur + 0.1 }, { snd: 'crunch', stop: 0.08 });
       a.latch = { id: t.id, kind: 'clamp', t: sp.dur, tick: sp.tick, acc: sp.tick * 0.6, mult: sp.tickMult, dmg: 0 };
-    } else miss = true;
-  } else if (sp.type === 'bolt') {
-    const t = nearestInFront(a, range, 0.5);
-    if (t) {
-      dealDamage(a, t, a.dmg() * sp.mult, sp.fx);
-      let n2 = null, nd = 8 * a.scale;
-      for (const e of ents.values()) { if (e === a || e === t || e.dead) continue; const dd = Math.hypot(e.x - t.x, e.z - t.z); if (dd < nd) { nd = dd; n2 = e; } }
-      if (n2) dealDamage(a, n2, a.dmg() * sp.mult * 0.5, sp.fx);
-    } else miss = true;
-  } else if (sp.type === 'area') {
-    for (const e of nearEnemies(a, sp.radius * a.scale)) dealDamage(a, e, a.dmg() * sp.mult, sp.fx);
-  } else if (sp.type === 'dash' || sp.type === 'leap') {
-    a.dashT = sp.dur; a.dashHit = new Set();
-  }
-  if (miss) a.spT = Math.min(a.spT, 2);
-  if (near) specialFx(a);
+      A.hold = sp.dur;
+    } else a.spT = Math.min(a.spT, 2); // промах — перезарядка короче
+  } else if (sp.type === 'leap') startLeap(a);
+  else if (sp.type === 'bolt') { if (!arcBolt(a, false)) a.spT = Math.min(a.spT, 2); }
+  else if (sp.type === 'dash') { a.dashT = sp.dur; a.dashHit = new Set(); }
+  else if (sp.type === 'area') quills(a, false);
 }
 
-// Ультимейт: у каждого робота свой, долгая перезарядка
-function ultimate(a) {
-  if (!a || a.dead || a.stunT > 0 || a.latch || a.ultCd > 0) return;
+function resolveUlt(a) {
   const U = a.S.ult;
-  a.ultCd = U.cd; a.ultFlagT = 0.5; a.atkAnim = 1;
-  if (a === me || camera.position.distanceTo(a.m.root.position) < 45) sfx.roar(0.7, a === me ? 1 : 0.5);
   if (U.type === 'buff') a.ultT = U.dur;
-  else if (U.type === 'barrage') volley(a, { count: U.count, range: U.range, cone: Math.PI, dmg: U.dmg, targets: 3, color: '#ffb03a' });
-  else if (U.type === 'storm') { a.stormT = U.dur; a.stormTick = 0.1; a.stormLeft = U.strikes; }
-  else if (U.type === 'stomp') for (const e of nearEnemies(a, U.radius * a.scale)) dealDamage(a, e, a.dmg() * U.dmg, U.fx);
+  else if (U.type === 'barrage') volley(a, rocketsOf(a));
+  else if (U.type === 'storm') a.storm = { t: U.dur, tick: 0.05, left: U.strikes };
+  else if (U.type === 'stomp') for (const e of nearEnemies(a, U.radius * a.scale)) dealDamage(a, e, a.dmg() * U.dmg, U.fx, { snd: 'thud', stop: 0.1 });
   else if (U.type === 'fortress') a.shieldT = U.dur;
-  ultFx(a, false);
-  if (a === me) toast(`${U.name}!`);
+}
+
+// Грозовая буря: молнии с неба по врагам рядом
+function stormTick(d, dt) {
+  const U = d.S.ult, St = d.storm;
+  St.t -= dt; St.tick -= dt;
+  if (St.tick <= 0 && St.left > 0) { St.tick += U.dur / U.strikes; St.left--; stormStrike(d, !St.dry); }
+  if (St.t <= 0) d.storm = null;
+}
+function stormStrike(a, real) {
+  const U = a.S.ult, R = U.range * a.scale, list = nearEnemies(a, R);
+  let x, z, y;
+  if (list.length) { const e = list[Math.floor(Math.random() * list.length)]; x = e.x; z = e.z; y = bodyPt(e)[1]; if (real) dealDamage(a, e, a.dmg() * U.dmg, U.fx, { snd: 'zap' }); }
+  else { const an = Math.random() * 6.28, r = 4 + Math.random() * 8; x = a.x + Math.sin(an) * r; z = a.z + Math.cos(an) * r; y = height(x, z) + 1; }
+  if (camD(x, z) < 80) {
+    bolt(x + jit(), y + 18, z + jit(), x, y, z, '#ffffff', 6, 2.2); bolt(x + jit(), y + 18, z + jit(), x, y, z, '#59a8ff', 6, 3);
+    fx.flash(x, y, z, 1.6, '#bfe9ff'); ring(x, y - 1, z, 3, '#59a8ff'); fx.dust(x, y, z, 1, 4, 1.5);
+    const v = Math.max(0, 1 - camD(x, z) / 60); if (v > 0.05) sfx.zap(v);
+  }
+}
+
+// ---- Прыжок раптора: настоящая дуга, наводится на цель, приземляется ей на спину ----
+function startLeap(a) {
+  const sp = a.S.special, R = sp.range * a.scale;
+  const t = nearestInFront(a, R, 0.6);
+  let tx, tz;
+  if (t) { tx = t.x; tz = t.z; } else { tx = a.x + Math.sin(a.rot) * R * 0.6; tz = a.z + Math.cos(a.rot) * R * 0.6; }
+  const dist = Math.hypot(tx - a.x, tz - a.z);
+  const H = (1.6 + dist * 0.16) * Math.max(0.7, a.scale);
+  a.leap = { t: 0, T: sp.flight, x0: a.x, z0: a.z, tx, tz, H, h0: 0, h: 0, tid: t ? t.id : null };
+  if (!t) a.spT = Math.min(a.spT, 3);
+}
+// спрыгнуть со спины: короткий прыжок назад-вбок
+function dismount(d) {
+  const t = d.latch && ents.get(d.latch.id);
+  d.latch = null; d.spT = Math.max(d.spT, 1.5);
+  const r = (t ? t.rot : d.rot) + Math.PI + (Math.random() - 0.5) * 1.4;
+  const back = (t ? t.radius() : 0) + d.radius() + 0.8;
+  const cx = t ? t.x : d.x, cz = t ? t.z : d.z, h0 = d.rideUp || 0;
+  d.leap = { t: 0, T: 0.4, x0: d.x, z0: d.z, tx: cx + Math.sin(r) * back, tz: cz + Math.cos(r) * back, H: 1.0 * d.scale, h0, h: h0, tid: null, off: true };
+  if (d.bot) { d.phase = 'retreat'; d.phaseT = 1.1; d.orbit = Math.random() < 0.5 ? 1 : -1; }
+}
+function endLatch(d) {
+  const L = d.latch;
+  if (!L) return;
+  if (L.kind === 'cling') { dismount(d); return; }
+  d.latch = null;
+  const A = d.act; // Рекс отпускает — заканчиваем удержание в анимации
+  if (A && A.an === 'clamp') { const an = AN.clamp; A.hold = Math.max(0, Math.min(A.hold, A.t - an.w - an.s)); }
+}
+
+// ---- Эффекты атак (у всех: свои, боты, чужие игроки, превью в меню) ----
+function bumpNear(e, k) { if (!me) return; const dd = Math.hypot(me.x - e.x, me.z - e.z); if (dd < 25) shake = Math.max(shake, k * (1 - dd / 25)); }
+function strikeFx(e, A) {
+  if (camD(e.x, e.z) > 70) return;
+  const S = e.S, s = e.scale, v = volAt(e), y0 = e.y, yaw = e.rot, glow = S.glow, R = S.reach * s, mv = A.mv;
+  const ahead = k => [e.x + Math.sin(yaw) * k, e.z + Math.cos(yaw) * k];
+  const hy = e.m.root.position.y + S.h * 0.45 * s;
+  switch (A.an) {
+    case 'bite': case 'clamp': {
+      e.m.jaw.getWorldPosition(_wp);
+      const mx = _wp.x + Math.sin(yaw) * 0.8 * s, mz = _wp.z + Math.cos(yaw) * 0.8 * s;
+      fx.flash(mx, _wp.y, mz, 0.45 * s, '#ffffff'); sparks(mx, _wp.y, mz, 0.45 * s, 4);
+      if (v > 0.03) sfx.whoosh(0.7, v * 0.5);
+      break;
+    }
+    case 'slap': fx.slash(e.x, hy, e.z, yaw, e.dir * 0.35, R * 0.85, 2.2, glow); if (v > 0.03) sfx.whoosh(0.9, v); break;
+    case 'clawR': case 'clawL': fx.slash(e.x, hy, e.z, yaw, -((mv && mv.side) || e.dir) * 0.9, R * 0.9, 2.0, glow); if (v > 0.03) sfx.whoosh(1.5, v); break;
+    case 'kick': fx.slash(e.x, e.m.root.position.y + S.h * 0.35 * s, e.z, yaw, Math.PI / 2, R * 0.8, 1.8, glow); if (v > 0.03) sfx.whoosh(1.3, v); break;
+    case 'ram': { const [x, z] = ahead(R * 0.6); fx.dust(e.x, y0, e.z, s, 6, 1.6); ring(x, y0, z, 1.8 * s, glow); if (v > 0.03) sfx.whoosh(0.6, v); break; }
+    case 'gore': fx.slash(e.x, hy, e.z, yaw, Math.PI / 2, R * 0.75, 1.6, glow); fx.dust(e.x, y0, e.z, s, 4, 1.2); if (v > 0.03) sfx.whoosh(0.6, v); break;
+    case 'hornswipe': fx.slash(e.x, hy, e.z, yaw, e.dir * 0.15, R * 0.9, 2.4, glow); if (v > 0.03) sfx.whoosh(0.8, v); break;
+    case 'tailwhip': case 'tailside': case 'tailflick':
+      fx.slash(e.x, e.m.root.position.y + S.h * 0.4 * s, e.z, yaw, e.dir * 0.2, R, 2.8, glow, true); if (v > 0.03) sfx.whoosh(0.7, v); break;
+    case 'tailslam': {
+      const [x, z] = ahead(-R * 0.75);
+      fx.slash(e.x, e.m.root.position.y + S.h * 0.5 * s, e.z, yaw, Math.PI / 2, R * 0.9, 1.4, glow, true);
+      ring(x, y0, z, 2.6 * s, glow); fx.dustRing(x, z, 2.2 * s, 12, s); bumpNear(e, 0.25); if (v > 0.03) sfx.thud(v);
+      break;
+    }
+    case 'bash': fx.slash(e.x, hy, e.z, yaw, e.dir * 0.3, R * 0.7, 2.2, glow); fx.dust(e.x, y0, e.z, s, 4); if (v > 0.03) sfx.whoosh(0.6, v); break;
+    case 'claws2': fx.slash(e.x, hy, e.z, yaw, 0.8, R * 0.85, 1.8, glow); fx.slash(e.x, hy, e.z, yaw, -0.8, R * 0.85, 1.8, glow); if (v > 0.03) sfx.whoosh(1.1, v); break;
+    case 'shock': {
+      const r = R * 0.85; ring(e.x, y0, e.z, r, glow); ring(e.x, y0 + 0.3, e.z, r * 0.6, '#ffffff');
+      const p = bodyPt(e);
+      for (let i = 0; i < 6; i++) { const a = i * 1.047 + Math.random(); bolt(...p, e.x + Math.sin(a) * r, y0 + 0.4, e.z + Math.cos(a) * r, glow, 3, 0.8); }
+      if (v > 0.03) sfx.zap(v);
+      break;
+    }
+    case 'saw': if (v > 0.03) sfx.saw(v); break;
+    case 'rearstomp': case 'quake': {
+      const big = A.an === 'quake', [x, z] = big ? [e.x, e.z] : ahead(R * 0.75), rr = big ? S.ult.radius * s : 3.6 * s, n = big ? 3 : 2;
+      for (let i = 1; i <= n; i++) ring(x, y0, z, rr * i / n, i === 1 ? '#ffffff' : glow, 0.45 + i * 0.1);
+      fx.dustRing(x, z, rr * 0.6, big ? 22 : 12, s); bumpNear(e, big ? 0.6 : 0.3); if (v > 0.03) sfx.thud(v);
+      break;
+    }
+    case 'spikes': if (!e.local) volley(e, mv, true); break;
+    case 'quills': ring(e.x, y0, e.z, S.special.radius * s, glow); if (!e.local) quills(e, true); if (v > 0.03) sfx.shoot(v); break;
+    case 'leap': fx.dust(e.x, y0, e.z, s, 6, 1.5); if (v > 0.03) sfx.whoosh(1.2, v); break;
+    case 'charge': if (!e.local) arcBolt(e, true); if (v > 0.03) sfx.zap(v); break;
+    case 'paw': fx.dust(e.x, y0, e.z, s * 1.2, 8, 2); if (v > 0.03) sfx.steam(v); break;
+    case 'roar': {
+      ring(e.x, y0, e.z, 6 * s, glow); ring(e.x, y0, e.z, 3.5 * s, '#ffffff');
+      for (const sd of [-1, 1]) {
+        const bx = e.x - Math.sin(yaw) * 0.9 * s + Math.cos(yaw) * 0.4 * sd * s, bz = e.z - Math.cos(yaw) * 0.9 * s - Math.sin(yaw) * 0.4 * sd * s;
+        fx.steam(bx, e.m.root.position.y + S.h * 0.8 * s, bz, s, 6, 6);
+      }
+      if (v > 0.03) sfx.steam(v);
+      break;
+    }
+    case 'launch': if (!e.local) volley(e, rocketsOf(e), true); break;
+    case 'storm': ring(e.x, y0, e.z, S.ult.range * s * 0.5, glow); if (!e.local) e.storm = { t: S.ult.dur, tick: 0.05, left: S.ult.strikes, dry: true }; break;
+    case 'fortress': ring(e.x, y0, e.z, 5 * s, glow); ring(e.x, y0, e.z, 3 * s, '#ffffff'); if (v > 0.03) sfx.thud(v * 0.6); break;
+  }
+}
+// во время замаха: треск разрядов на парусе / вокруг тела
+function windFx(e, A, dt) {
+  if (camD(e.x, e.z) > 55 || Math.random() > dt * 28) return;
+  const s = e.scale, top = e.m.root.position.y + e.S.h * 0.8 * s;
+  const z = (Math.random() - 0.5) * 3 * s, px = e.x + Math.sin(e.rot) * z, pz = e.z + Math.cos(e.rot) * z;
+  bolt(px, top, pz, px + jit(1.5 * s), top + (0.5 + Math.random()) * s, pz + jit(1.5 * s), e.S.glow, 2, 0.5);
+}
+// пила: искры с диска, пока она пилит
+function loopFx(e, A, dt) {
+  if (!e.m.saw || camD(e.x, e.z) > 55 || Math.random() > dt * 30) return;
+  e.m.saw.getWorldPosition(_wp);
+  sparks(_wp.x, _wp.y, _wp.z, 0.55 * e.scale, 2, 0.6);
+}
+// шаг: пыль, звук по весу робота, лёгкий толчок камеры от тяжёлых
+function footstep(e, L) {
+  e.thump = 1;
+  const d = camD(e.x, e.z); if (d > 55) return;
+  const w = e.S.weight, s = e.scale;
+  L.knee.getWorldPosition(_wp);
+  fx.dust(_wp.x, height(_wp.x, _wp.z), _wp.z, 0.45 * s * (0.4 + w), w > 0.6 ? 3 : 1, 0.6 + w);
+  const v = volAt(e);
+  if (v > 0.05 && (e === me || w > 0.6 || d < 15)) sfx.step(w * Math.min(1.2, s), v * (e === me ? 0.8 : 0.6));
+  if (w > 0.6 && me) {
+    if (e === me) camBump = Math.max(camBump, 0.07 * w * s);
+    else { const dm = Math.hypot(me.x - e.x, me.z - e.z); if (dm < 20) camBump = Math.max(camBump, 0.04 * w * s * (1 - dm / 20)); }
+  }
 }
 
 const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, +v || 0));
@@ -495,15 +588,16 @@ function applyDamage(t, dmg, byId, byName, f) {
   if (t.dead || NOW() < t.protUntil) return;
   f = f || {};
   const att = ents.get(byId);
-  if (t.sp === 'raptor' && !f.th && Math.random() < 0.22) { // Реактивное уклонение
+  if (t.sp === 'raptor' && !f.th && Math.random() < 0.2) { // Реактивное уклонение
     dmgNum(t.x, t.y + t.S.h * t.scale + 0.5, t.z, 'УКЛОН', t === me);
-    sparks(t.x, t.y + 1, t.z, 0.5, 4, 0.4); return;
+    sparks(t.x, t.y + 1, t.z, 0.5, 4, 0.4); fx.dust(t.x, t.y, t.z, t.scale, 3); return;
   }
   if (t.sp === 'trike' && att && Math.abs(angDiff(t.rot, Math.atan2(att.x - t.x, att.z - t.z))) < 0.9) dmg *= 0.6; // фронтальная броня
   if (t.shieldT > 0) dmg *= 0.45; // Крепость
   dmg = Math.round(dmg);
   t.hp -= dmg; t.combatT = 6; t.flash();
-  if (t.latch && t.latch.kind === 'cling') { t.latch.dmg += dmg; if (t.latch.dmg > t.maxHp() * 0.18) { t.latch = null; t.spT = Math.max(t.spT, 2); if (t === me) toast('Сбросили с брони!'); } } // сбили наездника
+  if (att) { t.react = Math.max(t.react, Math.min(1, 0.6 + dmg / t.maxHp() * 4)); t.reactSide = Math.sign(angDiff(t.rot, Math.atan2(att.x - t.x, att.z - t.z))) || 1; }
+  if (t.latch && t.latch.kind === 'cling') { t.latch.dmg += dmg; if (t.latch.dmg > t.maxHp() * 0.18) { dismount(t); if (t === me) toast('Сбросили с брони!'); } } // сбили наездника
   if (f.s && t.stunImm <= 0) { t.stunT = Math.max(t.stunT, f.s); t.stunImm = f.s + 2; t.dashT = 0; if (t === me) toast('⚡ Системы обесточены!'); }
   if (f.sl) t.slowT = Math.max(t.slowT, f.sl);
   if (f.kb && att) { const dx = t.x - att.x, dz = t.z - att.z, dd = Math.hypot(dx, dz) || 1; t.kvx += dx / dd * f.kb * 3; t.kvz += dz / dd * f.kb * 3; }
@@ -515,7 +609,7 @@ function applyDamage(t, dmg, byId, byName, f) {
       else if (net && att.peer) net.hit(att.peer, { t: att.id, d: r, b: t.id, n: t.name, f: { th: 1 } });
     }
   }
-  if (t === me) { shake = 0.35; sfx.hurt(); flashVignette(); dmgNum(me.x, me.y + me.S.h * me.scale + 0.5, me.z, dmg, false); }
+  if (t === me) { shake = Math.max(shake, 0.3); hitStop = Math.max(hitStop, 0.035); sfx.hurt(); flashVignette(); dmgNum(me.x, me.y + me.S.h * me.scale + 0.5, me.z, dmg, false); }
   if (t.bot) t.aggro = byId;
   if (t.hp <= 0) killEnt(t, byId, byName);
 }
@@ -532,9 +626,12 @@ function onKill(msg) {
   const e = ents.get(msg.id);
   world.spawnCarcass(msg.x, msg.z, msg.s);
   const y = height(msg.x, msg.z) + 1;
-  sparks(msg.x, y, msg.z, 1.2 + msg.s, 14);
+  sparks(msg.x, y + msg.s, msg.z, 1.2 + msg.s, 16);
+  fx.flash(msg.x, y + msg.s, msg.z, 2.5 + msg.s * 2, '#ffb03a');
+  fx.dustRing(msg.x, msg.z, 3 + msg.s * 2, 16, 1 + msg.s * 0.5);
+  fx.steam(msg.x, y + msg.s, msg.z, 1 + msg.s, 6, 4);
   ring(msg.x, y - 0.6, msg.z, 5 + msg.s * 3, '#ffb03a');
-  if (camera.position.distanceTo(_kp.set(msg.x, y, msg.z)) < 60) sfx.boom();
+  if (camera.position.distanceTo(_kp.set(msg.x, y, msg.z)) < 60) { sfx.boom(); bumpNear({ x: msg.x, z: msg.z }, 0.4); }
   feed(`⚙️ ${msg.bn} уничтожил ${msg.n}`);
   const k = ents.get(msg.b);
   if (k && k.local && !k.dead) {
@@ -543,6 +640,7 @@ function onKill(msg) {
     k.hp = Math.min(k.maxHp(), k.hp + k.maxHp() * 0.35);
     if (k === me) { lifeStats.kills++; toast('Уничтожен! Собери металлолом 🔩'); }
   }
+  for (const o of ents.values()) if (o.latch && o.latch.id === msg.id) endLatch(o);
   if (e) {
     ents.delete(e.id); e.dispose();
     if (e === me) { me = null; playing = false; showDeath(msg.bn); }
@@ -568,22 +666,17 @@ const handlers = {
         ents.set(id, e);
       }
       e.peer = peerId; e.lastSeen = NOW();
-      if (hp < e.hpFrac - 0.005) e.flash();
+      if (hp < e.hpFrac - 0.005) { e.flash(); e.react = Math.max(e.react, 0.6); }
       e.tx = x; e.tz = z; e.trot = rot; e.g = Math.max(0, Math.min(1, +g || 0)); e.hpFrac = hp; e.kills = kills | 0;
       e.moving = (flags & 1) !== 0; e.sprint = (flags & 4) !== 0;
       const af = flags & 2;
-      const sf = flags & 16, uf = flags & 1024;
-      if (af && !e.lastAtkFlag && !sf) {
-        const mv = e.S.moves[(flags >> 7) & 3] || e.S.moves[0];
-        e.curMove = mv; e.atkAnim = 1; e.dir = -e.dir;
-        if (mv.spin) { e.spinVis = e.spinDur = mv.spin; e.spinTurns = mv.turns || 2; }
-        if (mv.type === 'volley') volley(e, mv, true);
-      } else if (af && !e.lastAtkFlag) e.atkAnim = 1;
-      if (sf && !e.lastSpFlag) specialFx(e);
-      if (uf && !e.lastUltFlag) { e.atkAnim = 1; ultFx(e, true); }
+      const sf = flags & 16, uf = flags & 2048;
+      if (af && !e.lastAtkFlag && !sf && !uf) { const mv = e.S.all[(flags >> 7) & 7]; if (mv) { e.dir = flags & 4096 ? -1 : 1; startAct(e, mv.anim, { mv }); } }
+      if (sf && !e.lastSpFlag) startAct(e, e.S.special.anim, { sp: true });
+      if (uf && !e.lastUltFlag) startAct(e, e.S.ult.anim, { ult: true });
       e.lastAtkFlag = af; e.lastSpFlag = sf; e.lastUltFlag = uf;
-      e.ultT = (flags & 512) ? 0.5 : 0;
-      e.shieldT = (flags & 32) ? 0.5 : 0; e.clung = (flags & 64) !== 0;
+      e.ultT = (flags & 1024) ? 0.5 : 0; e.shieldT = (flags & 32) ? 0.5 : 0; e.stunT = (flags & 8192) ? 0.3 : 0;
+      e.clung = (flags & 64) !== 0;
     }
     for (const e of ents.values()) if (!e.local && e.peer === peerId && !seen.has(e.id)) { ents.delete(e.id); e.dispose(); }
   },
@@ -630,7 +723,7 @@ function sendState() {
   const e = [];
   for (const d of ents.values()) {
     if (!d.local || d.dead) continue;
-    const flags = (d.moving ? 1 : 0) | (d.atkFlagT > 0 ? 2 : 0) | (d.sprint ? 4 : 0) | (d.bot ? 8 : 0) | (d.spFlagT > 0 ? 16 : 0) | (d.shieldT > 0 ? 32 : 0) | (d.latch && d.latch.kind === 'cling' ? 64 : 0) | ((d.lastStep & 3) << 7) | (d.ultT > 0 ? 512 : 0) | (d.ultFlagT > 0 ? 1024 : 0);
+    const flags = (d.moving ? 1 : 0) | (d.atkFlagT > 0 ? 2 : 0) | (d.sprint ? 4 : 0) | (d.bot ? 8 : 0) | (d.spFlagT > 0 ? 16 : 0) | (d.shieldT > 0 ? 32 : 0) | (isClung(d) ? 64 : 0) | ((d.lastMv & 7) << 7) | (d.ultT > 0 ? 1024 : 0) | (d.ultFlagT > 0 ? 2048 : 0) | (d.dir < 0 ? 4096 : 0) | (d.stunT > 0 ? 8192 : 0);
     e.push([d.id, SP_KEYS.indexOf(d.sp), d.name, r1(d.x), r1(d.z), r2(d.rot), r2(d.g), r2(Math.max(0, d.hp / d.maxHp())), flags, d.kills]);
   }
   net.state({ c: clientId, e });
@@ -658,8 +751,8 @@ function spawnMe(sp, name) {
   ring(x, height(x, z), z, 6, me.S.glow);
 }
 
-function spawnBot() {
-  const sp = SP_KEYS[Math.floor(Math.random() * SP_KEYS.length)];
+function spawnBot(force) {
+  const sp = force || SP_KEYS[Math.floor(Math.random() * SP_KEYS.length)];
   const [x, z] = spawnPoint();
   const g = mode === 'prime' ? 1 : 0.15 + Math.random() * 0.75;
   const used = new Set([...ents.values()].map(e => e.name));
@@ -671,62 +764,97 @@ function spawnBot() {
 
 // ================= Движение (общее для игрока и ботов) =================
 const isClung = e => (e.local ? !!(e.latch && e.latch.kind === 'cling') : e.clung);
+const isAir = e => isClung(e) || (e.local ? !!e.leap : e.leapH > 0.3);
 function moveMech(d, mx, mz, run, dt) {
   if (d.stunT > 0) { mx = 0; mz = 0; run = false; d.dashT = 0; }
+  // полёт (прыжок раптора или соскок со спины)
+  if (d.leap) {
+    const L = d.leap; L.t += dt;
+    const u = Math.min(1, L.t / L.T), t = L.tid ? ents.get(L.tid) : null;
+    if (t && !t.dead) { L.tx = t.x; L.tz = t.z; } // наводится на цель в полёте
+    d.x = L.x0 + (L.tx - L.x0) * u; d.z = L.z0 + (L.tz - L.z0) * u;
+    if (!L.off && Math.hypot(L.tx - d.x, L.tz - d.z) > 0.3) d.rot = Math.atan2(L.tx - d.x, L.tz - d.z);
+    L.h = L.h0 * (1 - u) + 4 * u * (1 - u) * L.H;
+    d.moving = false; d.sprint = false; d.vsp = 0; d.kvx = d.kvz = 0;
+    if (t && !t.dead && u > 0.55 && Math.hypot(t.x - d.x, t.z - d.z) < t.radius() + d.radius() + 0.8) {
+      const sp = d.S.special;
+      d.leap = null;
+      dealDamage(d, t, d.dmg() * sp.mult, sp.fx, { snd: 'slash', stop: 0.07 });
+      d.latch = { id: t.id, kind: 'cling', t: sp.latch, tick: sp.tick, acc: 0.3, mult: sp.tickMult, fx: sp.fx, dmg: 0 };
+      if (camD(t.x, t.z) < 50) ring(t.x, t.y, t.z, t.radius() * 1.4, d.S.glow);
+      if (t === me) toast('🦖 Раптор на спине! Бей его — сбросишь');
+      return;
+    }
+    if (u >= 1) {
+      d.leap = null;
+      if (camD(d.x, d.z) < 50) { fx.dust(d.x, d.y, d.z, d.scale * 1.2, 7, 2); sfx.step(0.5, volAt(d)); }
+      if (!L.off) d.atkT = 0; // после прыжка удар готов сразу
+    }
+    world.collide(d, d.radius());
+    return;
+  }
   if (d.latch) {
     const L = d.latch, t = ents.get(L.id);
-    if (!t || t.dead || d.stunT > 0 || L.t <= 0) d.latch = null;
-    else if (L.kind === 'cling') { // Раптор сидит на спине врага
-      d.x = t.x - Math.sin(t.rot) * 0.4; d.z = t.z - Math.cos(t.rot) * 0.4; d.rot = t.rot; d.moving = false; d.sprint = false; return;
-    } else if (Math.hypot(t.x - d.x, t.z - d.z) > d.radius() + t.radius() + d.S.reach * d.scale * 1.6) d.latch = null;
-    else { // Рекс держит и не двигается
-      d.moving = false; d.sprint = false;
-      d.rot += Math.max(-d.S.turn * dt, Math.min(d.S.turn * dt, angDiff(d.rot, Math.atan2(t.x - d.x, t.z - d.z)))); return;
+    if (!t || t.dead || d.stunT > 0 || L.t <= 0) endLatch(d);
+    else if (L.kind === 'cling') { // Раптор сидит на спине врага и двигается вместе с ним
+      const R = t.S.ride, hs = t.scale;
+      d.x = t.x + Math.sin(t.rot) * R[0] * hs; d.z = t.z + Math.cos(t.rot) * R[0] * hs; d.rot = t.rot;
+      d.moving = false; d.sprint = false; d.vsp = 0; d.kvx = d.kvz = 0;
+      return;
+    } else if (Math.hypot(t.x - d.x, t.z - d.z) > d.radius() + t.radius() + d.S.reach * d.scale * 1.6) endLatch(d);
+    else { // Рекс держит челюстями и стоит на месте
+      d.moving = false; d.sprint = false; d.vsp = 0;
+      d.rot += Math.max(-d.S.turn * dt, Math.min(d.S.turn * dt, angDiff(d.rot, Math.atan2(t.x - d.x, t.z - d.z))));
+      return;
     }
+  }
+  // во время замаха и удара тяжёлые почти стоят — удар «весит»
+  let actK = 1, turnK = 1;
+  const A = d.act;
+  if (A) {
+    const an = AN[A.an], heavy = d.S.weight > 0.6, hitPhase = A.t < an.w + an.s;
+    if (A.mv) { actK = hitPhase ? (heavy ? 0.25 : 0.65) : (heavy ? 0.6 : 0.9); turnK = hitPhase && heavy ? 0.45 : 1; }
+    else if (A.an !== 'paw' || A.t < an.w) { actK = hitPhase ? 0.15 : 0.6; turnK = 0.4; }
   }
   const mag = Math.min(1, Math.hypot(mx, mz));
   d.moving = mag > 0.08 || d.dashT > 0;
   d.sprint = run && d.moving && d.st > 2;
   if (d.sprint) d.st = Math.max(0, d.st - 22 * dt); else d.st = Math.min(100, d.st + 14 * dt);
-  if (d.dashT > 0) {
+  if (d.dashT > 0) { // Трицера: таран
     d.dashT -= dt;
-    const sp = d.S.special.speed * Math.max(0.6, d.scale);
-    d.x += Math.sin(d.rot) * sp * dt; d.z += Math.cos(d.rot) * sp * dt;
-    if (Math.random() < 0.6) sparks(d.x - Math.sin(d.rot) * d.radius(), d.y + d.S.h * 0.4 * d.scale, d.z - Math.cos(d.rot) * d.radius(), d.scale * 0.8, 1, 0.3);
+    const spd = d.S.special.speed * Math.max(0.6, d.scale);
+    d.x += Math.sin(d.rot) * spd * dt; d.z += Math.cos(d.rot) * spd * dt;
+    if (Math.random() < 0.5 && camD(d.x, d.z) < 50) fx.dust(d.x - Math.sin(d.rot) * d.radius(), d.y, d.z - Math.cos(d.rot) * d.radius(), d.scale, 1, 1);
     for (const e of ents.values()) {
-      if (e === d || e.dead || d.dashHit.has(e.id)) continue;
+      if (e === d || e.dead || d.dashHit.has(e.id) || isAir(e)) continue;
       if (Math.hypot(e.x - d.x, e.z - d.z) < d.radius() + e.radius() + 0.8 * d.scale) {
         const sp = d.S.special;
-        if (sp.type === 'leap') { // Раптор: вцепляется в первого, кого достал
-          dealDamage(d, e, d.dmg() * sp.mult, sp.fx);
-          d.latch = { id: e.id, kind: 'cling', t: sp.latch, tick: sp.tick, acc: 0.25, mult: sp.tickMult, fx: sp.fx, dmg: 0 };
-          d.dashT = 0; d.hopT = 0; break;
-        }
-        d.dashHit.add(e.id); dealDamage(d, e, d.dmg() * sp.mult, sp.fx);
+        d.dashHit.add(e.id); dealDamage(d, e, d.dmg() * sp.mult, sp.fx, { snd: 'thud', stop: 0.09 });
       }
     }
-    if (d.dashT <= 0 && d.sp === 'raptor') d.atkT = 0; // после прыжка удар готов сразу
+    d.vsp = spd * 0.5;
   } else {
     let tsp = 0;
     if (d.moving) {
-      const want = Math.atan2(mx, mz), turn = d.S.turn * dt, df = angDiff(d.rot, want);
+      const want = Math.atan2(mx, mz), turn = d.S.turn * turnK * dt, df = angDiff(d.rot, want);
       d.rot += Math.max(-turn, Math.min(turn, df));
-      tsp = d.speed(d.sprint) * mag * (Math.abs(df) > 1.6 ? 0.4 : 1) * (d.sawT > 0 ? 0.6 : 1);
+      tsp = d.speed(d.sprint) * mag * (Math.abs(df) > 1.6 ? 0.4 : 1) * actK;
     }
     d.vsp += (tsp - d.vsp) * Math.min(1, d.S.accel * dt); // тяжёлые разгоняются и тормозят медленнее
     if (d.vsp < 0.05) d.vsp = 0;
     if (d.vsp > 0) { d.x += Math.sin(d.rot) * d.vsp * dt; d.z += Math.cos(d.rot) * d.vsp * dt; }
     if (d.vsp > 0.8) d.moving = true;
   }
-  if (d.kvx || d.kvz) { // отбрасывание
+  if (d.kvx || d.kvz) { // отбрасывание и шаг в удар
     d.x += d.kvx * dt; d.z += d.kvz * dt;
     const k = Math.exp(-6 * dt); d.kvx *= k; d.kvz *= k;
     if (Math.abs(d.kvx) + Math.abs(d.kvz) < 0.1) d.kvx = d.kvz = 0;
   }
-  for (const e of ents.values()) {
-    if (e === d || e.dead || isClung(e)) continue; // наездник на спине не должен выталкивать хозяина (иначе тот «улетает»)
+  // мягкое расталкивание: не больше 7 м/с, и никого не толкает тот, кто в воздухе или на спине
+  if (!isAir(d)) for (const e of ents.values()) {
+    if (e === d || e.dead || isAir(e)) continue;
     const dx = d.x - e.x, dz = d.z - e.z, dist = Math.hypot(dx, dz), m = (d.radius() + e.radius()) * 0.75;
-    if (dist < m && dist > 0.001) { const k = (m - dist) / dist * (e.local ? 0.5 : 1); d.x += dx * k; d.z += dz * k; }
+    if (dist < m && dist > 0.001) { const p = Math.min((m - dist) * (e.local ? 0.5 : 1), 7 * dt); d.x += dx / dist * p; d.z += dz / dist * p; }
   }
   world.collide(d, d.radius());
   const r = Math.hypot(d.x, d.z);
@@ -773,7 +901,6 @@ const AI_FLEE = { brawler: 0.12, skirmisher: 0.35, circler: 0.25, rammer: 0.2, b
 function botAI(b, dt) {
   const ai = b.S.ai;
   if (!b.home) b.home = { x: b.x, z: b.z };
-  if (b.wasLatch && !b.latch && ai === 'skirmisher') { b.phase = 'retreat'; b.phaseT = 1.0; b.orbit = Math.random() < 0.5 ? 1 : -1; } // спрыгнул — отскок
   b.think -= dt;
   if (b.think <= 0) {
     b.think = 0.35 + Math.random() * 0.3;
@@ -806,20 +933,24 @@ function botAI(b, dt) {
   }
   let mx = 0, mz = 0, run = false;
   const t = b.target && !b.target.dead && ents.has(b.target.id) ? b.target : null;
-  if (t) {
+  if (t && (b.latch || b.leap)) { /* на спине или в полёте — управляет сам захват */ }
+  else if (t) {
     const dx = t.x - b.x, dz = t.z - b.z, d = Math.hypot(dx, dz) || 1, ang = Math.atan2(dx, dz);
     const reach = b.S.reach * b.scale + t.radius();
-    const off = Math.abs(angDiff(b.rot, ang));
-    const step = b.chainT > 0 ? b.step : 0, lim = b.S.turn * dt;
-    const face = () => { b.rot += Math.max(-lim, Math.min(lim, angDiff(b.rot, ang))); };
+    const rearR = b.S.rear.length ? Math.max(...b.S.rear.map(m => rangeOf(b, m))) + t.radius() : 0;
+    const off = Math.abs(angDiff(b.rot, ang)), behind = off > 1.75 && d < rearR * 0.95;
+    const lim = b.S.turn * dt;
+    const turnTo = a => { b.rot += Math.max(-lim, Math.min(lim, angDiff(b.rot, a))); };
+    const face = () => turnTo(ang);
     const fwd = (k = 1) => { mx = dx / d * k; mz = dz / d * k; };
     const back = () => { mx = -dx / d; mz = -dz / d; };
     const side = k => { mx = -dz / d * b.orbit * k; mz = dx / d * b.orbit * k; };
     if (b.flee) { back(); run = b.st > 20; }
+    else if (behind && b.phase !== 'retreat') { turnTo(ang + Math.PI); attack(b, false); } // враг сзади — бьём хвостом
     else if (ai === 'brawler') { // Рекс: давит напролом
       if (d > reach * 0.85) { fwd(); run = d > 12 && b.st > 30; }
       else { face(); if (off < 0.5) { if (b.spT <= 0 && Math.random() < 0.08) attack(b, true); else attack(b, false); } }
-    } else if (ai === 'skirmisher') { // Раптор: 3 удара — отскок по кругу, прыжок для сближения
+    } else if (ai === 'skirmisher') { // Раптор: серия — отскок по кругу, прыжок на спину для сближения
       if (b.phase === 'retreat') {
         b.phaseT -= dt; back(); const bx = mx, bz = mz; side(1); mx = mx * 0.8 + bx * 0.6; mz = mz * 0.8 + bz * 0.6; run = b.st > 15;
         if (b.phaseT <= 0) { b.phase = 'strike'; b.hits = 0; }
@@ -828,26 +959,31 @@ function botAI(b, dt) {
         if (b.spT <= 0 && d < 12 && d > 4.5 && off < 0.2) attack(b, true); // прыжок-захват
       } else {
         face();
-        if (off < 0.6 && b.atkT <= 0) { attack(b, false); if (++b.hits >= 3) { b.phase = 'retreat'; b.phaseT = 1.0 + Math.random() * 0.6; b.orbit = Math.random() < 0.5 ? 1 : -1; } }
+        if (off < 0.6 && b.atkT <= 0 && !b.busy()) { attack(b, false); if (++b.hits >= 3) { b.phase = 'retreat'; b.phaseT = 1.0 + Math.random() * 0.6; b.orbit = Math.random() < 0.5 ? 1 : -1; } }
       }
-    } else if (ai === 'circler') { // Спино: кружит вокруг врага и пилит хвостом, издали бьёт молнией
-      b.orbitT -= dt; if (b.orbitT <= 0) { b.orbit = -b.orbit; b.orbitT = 2.5 + Math.random() * 1.5; }
-      const R = b.S.reach * b.scale * 0.9;
-      if (d > R * 1.1) { fwd(); run = d > 14 && b.st > 30; if (b.spT <= 0 && d > 6 && d < b.S.special.range * 0.9 * b.scale) { face(); if (off < 0.35) attack(b, true); } }
-      else if (step === 1) { mx = 0; mz = 0; face(); if (off < 0.6) attack(b, false); } // укус: надо смотреть на врага
-      else { if (d < R * 0.5) { const bx = -dx / d, bz = -dz / d; side(0.8); mx = mx + bx * 0.4; mz = mz + bz * 0.4; } else side(0.9); attack(b, false); }
+    } else if (ai === 'circler') { // Спино: кусает и рвёт когтями, потом разворачивается к врагу пилой; издали — молния
+      if (b.phase === 'saw') {
+        b.phaseT -= dt; turnTo(ang + Math.PI);
+        if (b.phaseT <= 0 || d > rearR * 1.2) b.phase = '';
+      } else if (d > reach * 0.85) {
+        fwd(); run = d > 14 && b.st > 30;
+        if (b.spT <= 0 && d > 6 && d < b.S.special.range * 0.9 * b.scale && off < 0.35) attack(b, true);
+      } else {
+        face();
+        if (off < 0.6 && b.atkT <= 0 && !b.busy()) { attack(b, false); if (b.stepF >= 3) { b.phase = 'saw'; b.phaseT = 2.2; b.stepF = 0; } }
+      }
     } else if (ai === 'rammer') { // Трицера: разгоняется и таранит
       if (d > reach * 0.85) { fwd(); run = d > 10 && b.st > 30; if (b.spT <= 0 && d > 6 && d < 20 && off < 0.25) attack(b, true); }
       else { face(); if (off < 0.6) attack(b, false); }
-    } else { // bastion — Стего: стоит на месте, разворачивается к врагу задом и бьёт хвостом, потом лицом — залп шипов
+    } else { // bastion — Стего: держит точку, поворачивается к врагу хвостом; издали — залп шипов
       const hd = Math.hypot(b.home.x - b.x, b.home.z - b.z);
-      const hitD = b.S.reach * b.scale + t.radius();
       if (hd > 20) { mx = (b.home.x - b.x) / hd; mz = (b.home.z - b.z) / hd; }
-      else if (d < hitD * 1.5 || (step === 2 && d < 9)) {
-        const rear = step < 2, want = rear ? ang + Math.PI : ang;
-        b.rot += Math.max(-lim, Math.min(lim, angDiff(b.rot, want)));
-        if (Math.abs(angDiff(rear ? b.rot + Math.PI : b.rot, ang)) < (rear ? 0.8 : 0.45) && d < (rear ? hitD : 9)) attack(b, false);
-      } else if (d < 14) face();
+      else if (d < rearR * 1.3) turnTo(ang + Math.PI);
+      else if (d < 10) {
+        face();
+        const nm = nextMove(b).mv;
+        if (off < 0.45 && (nm.area === 'proj' || d < rangeOf(b, nm) + t.radius())) attack(b, false);
+      }
       const R = b.S.special.radius * b.scale * 0.9;
       if (b.spT <= 0 && d < R && (b.hp < b.maxHp() * 0.7 || Math.random() < 0.03)) attack(b, true);
     }
@@ -953,7 +1089,7 @@ function updatePlayer(dt) {
 
 // ================= Камера и превью в меню =================
 const camTarget = new THREE.Vector3(), camWant = new THREE.Vector3(), _right = new THREE.Vector3();
-let menuAngle = 0, viewT = 0, preview = null, previewKey = '';
+let menuAngle = 0, viewT = 0, preview = null, previewKey = '', previewT = 1.2, previewI = 0;
 const PREVIEW_POS = (() => {
   for (let r = 0; r < 80; r += 3) for (let a = 0; a < 6.28; a += 0.4) {
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
@@ -965,10 +1101,11 @@ function setPreview(key) {
   if (previewKey === key) return;
   if (preview) preview.dispose();
   preview = new Mech('preview', key, '', { preview: true, x: PREVIEW_POS[0], z: PREVIEW_POS[1], g: 1 });
-  previewKey = key;
+  previewKey = key; previewT = 1.0; previewI = 0;
   ring(preview.x, preview.y, preview.z, 5, preview.S.glow);
 }
 function updateCamera(dt, time) {
+  if (DBG.cam) { const c = typeof DBG.cam === 'function' ? DBG.cam() : DBG.cam; camera.position.set(...c[0]); camera.lookAt(...c[1]); return; }
   if (me) {
     const s = me.scale * me.S.cam;
     const dist = 3.8 + 10.5 * s, h = 1.0 + 3.2 * s;
@@ -978,12 +1115,23 @@ function updateCamera(dt, time) {
     const cy = Math.max(camTarget.y + Math.sin(camPitch) * dist, height(cx, cz) + 1.2, WATER_Y + 1);
     camera.position.lerp(camWant.set(cx, cy, cz), Math.min(1, dt * 10));
     if (shake > 0) { shake -= dt; camera.position.x += (Math.random() - 0.5) * shake * 2; camera.position.y += (Math.random() - 0.5) * shake * 2; }
+    if (camBump > 0.002) camera.position.y -= camBump; // тяжёлый шаг — камера чуть вздрагивает
+    camBump *= Math.exp(-dt * 14);
     camera.lookAt(camTarget);
     viewT -= dt; if (viewT <= 0) { viewT = 0.12; world.clearView(camera.position, me.x, me.z); }
     if (preview) { preview.dispose(); preview = null; previewKey = ''; }
   } else if (preview) {
     // меню: камера облетает выбранного меха, а сам мех стоит в свободной части экрана
     menuAngle += dt * 0.22;
+    // в меню робот показывает свои атаки по очереди
+    previewT -= dt;
+    if (previewT <= 0) {
+      const S = preview.S, list = S.all.map(m => ({ an: m.anim, mv: m })).concat([{ an: S.special.anim, sp: true }, { an: S.ult.anim, ult: true }]);
+      const it = list[previewI++ % list.length];
+      preview.dir = (it.mv && it.mv.side) || -preview.dir;
+      startAct(preview, it.an, it.mv ? { mv: it.mv } : { sp: it.sp, ult: it.ult });
+      previewT = AN[it.an].d + 0.9;
+    }
     preview.visual(dt, time);
     const p = preview.m.root.position, land = innerWidth > innerHeight, D = land ? 15 : 19;
     camera.position.set(p.x + Math.sin(menuAngle) * D, p.y + 5, p.z + Math.cos(menuAngle) * D);
@@ -1056,7 +1204,7 @@ function updateHud() {
   $('gr-fill').style.width = Math.min(1, me.g) * 100 + '%';
   $('stage').innerHTML = `<b style="color:${me.S.glow}">${me.S.name}</b> · ${STAGES[stageIndex(me.g)]}` + (me.g < 1 ? ` <small>${Math.floor(me.g * 100)}%</small>` : ' ★');
   $('b-sp').style.setProperty('--cd', Math.max(0, me.spT / me.S.special.cd));
-  const mv = me.S.moves[me.chainT > 0 ? me.step : 0];
+  const mv = nextMove(me).mv;
   $('b-atk').style.setProperty('--cd', Math.max(0, me.atkT / mv.cd));
   $('b-ult').style.setProperty('--cd', Math.max(0, me.ultCd / me.S.ult.cd));
   $('b-ult').classList.toggle('ready', me.ultCd <= 0);
@@ -1100,11 +1248,12 @@ function renderCards() {
   }).join('');
   const S = SPECIES[chosen];
   $('desc').innerHTML = `<span class="dd">${S.desc}</span>
-    <div class="tr"><b>⚔️ Серия:</b> ${S.moves.map(m => m.name).join(' → ')}</div>
+    <div class="tr"><b>⚔️ Серия:</b> ${S.front.map(m => m.name).join(' → ')}</div>
+    <div class="tr"><b>↩️ Враг сзади:</b> ${S.rear.map(m => m.name).join(', ')}</div>
     <div class="tr"><b style="color:${S.glow}">✨ ${S.special.name}:</b> ${S.special.info}</div>
     <div class="tr"><b style="color:${S.glow}">🌀 ${S.ult.name}:</b> ${S.ult.info}</div>
     <div class="tr"><b>🛡 ${S.passive.name}:</b> ${S.passive.info}</div>
-    <div class="tr"><b>🧠 Стиль:</b> ${S.aiInfo}</div>`;
+    <div class="tr ai"><b>🧠 Стиль:</b> ${S.aiInfo}</div>`;
   document.querySelectorAll('.card').forEach(b => b.onclick = () => { chosen = b.dataset.k; renderCards(); });
   document.querySelectorAll('.mode').forEach(b => {
     b.classList.toggle('sel', b.dataset.m === chosenMode);
@@ -1116,6 +1265,7 @@ renderCards();
 
 function startGame() {
   initAudio();
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); // иначе клавиши уходят в поле ника
   goLandscape();
   const name = ($('nick').value.trim() || 'Пилот' + Math.floor(Math.random() * 900 + 100)).slice(0, 14);
   localStorage.setItem('mech_nick', name); localStorage.setItem('mech_sp', chosen); localStorage.setItem('mech_mode', chosenMode);
@@ -1144,13 +1294,15 @@ let last = NOW(), fpsAcc = 0, fpsFrames = 0;
 function frame() {
   requestAnimationFrame(frame);
   const now = NOW();
-  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const rdt = Math.min(0.05, (now - last) / 1000); last = now;
   const time = now / 1000;
+  // хит-стоп: на долю секунды всё «замирает» при сильном ударе — удар ощущается
+  const dt = (hitStop > 0 ? rdt * 0.12 : rdt) * DBG.ts; hitStop = Math.max(0, hitStop - rdt);
 
   if (playing && me && !me.dead) { updatePlayer(dt); tickCommon(me, dt); }
   if (mode) manageBots(dt);
   for (const e of ents.values()) {
-    if (e.local && e.bot && !e.dead) { botAI(e, dt); tickCommon(e, dt); }
+    if (e.local && e.bot && !e.dead && !DBG.freeze) { botAI(e, dt); tickCommon(e, dt); }
     if (!e.local) {
       if (now - e.lastSeen > 5000) { ents.delete(e.id); e.dispose(); continue; }
       const k = Math.min(1, dt * 10);
@@ -1160,18 +1312,18 @@ function frame() {
     e.visual(dt, time);
   }
   world.update(dt, time);
-  updateFx(dt);
-  updateCamera(dt, time);
-  updateNums(dt);
+  fx.update(dt);
+  updateCamera(rdt, time);
+  updateNums(rdt);
 
-  sendTimer -= dt; if (sendTimer <= 0) { sendTimer = 0.1; sendState(); }
-  hudTimer -= dt; if (hudTimer <= 0) { hudTimer = 0.2; updateHud(); }
-  mapTimer -= dt; if (mapTimer <= 0 && playing) { mapTimer = 0.25; drawMinimap(); }
+  sendTimer -= rdt; if (sendTimer <= 0) { sendTimer = 0.1; sendState(); }
+  hudTimer -= rdt; if (hudTimer <= 0) { hudTimer = 0.2; updateHud(); }
+  mapTimer -= rdt; if (mapTimer <= 0 && playing) { mapTimer = 0.25; drawMinimap(); }
 
   renderer.render(scene, camera);
 
   // Автонастройка качества: если тормозит — снижаем разрешение
-  fpsAcc += dt; fpsFrames++;
+  fpsAcc += rdt; fpsFrames++;
   if (fpsAcc > 2) {
     const fps = fpsFrames / fpsAcc; fpsAcc = 0; fpsFrames = 0;
     if (fps < 40 && pixelRatio > 0.7) {
@@ -1183,4 +1335,6 @@ function frame() {
 }
 $('loading').classList.add('hidden');
 requestAnimationFrame(frame);
-window.__game = { ents, get me() { return me; }, attack };
+window.__game = { ents, world, renderer, get me() { return me; }, attack, ultimate, AN, DBG, cam(y, p) { camYaw = y; camPitch = p; lastCamInput = NOW() + 1e9; }, spawn: sp => spawnBot(sp),
+  // для отладки сети: подменить отправку состояния (зеркало самого себя)
+  dbgNet(fn) { net = fn ? { state: fn, hit() {}, kill() {}, leave() {} } : null; }, handlers };

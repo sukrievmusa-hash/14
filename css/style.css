@@ -135,6 +135,7 @@ h2 { font-size: 24px; margin: 4px 0 6px; font-style: italic; }
   #desc { font-size: 11px; min-height: 28px; max-height: 42vh; overflow-y: auto; }
   #desc .tr { font-size: 10px; margin-top: 2px; }
   #desc .dd { display: none; }
+  #desc .ai { display: none; }
   .modes { margin: 6px 0; } .mode { padding: 6px; font-size: 13px; }
   #play { padding: 9px; font-size: 18px; }
   #bars { width: min(230px, 32vw); }
