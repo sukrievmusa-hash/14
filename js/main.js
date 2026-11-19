@@ -80,16 +80,18 @@ class Mech {
     this.atkT = 0; this.spT = 0; this.dashT = 0; this.dashHit = null; this.atkAnim = 0; this.atkFlagT = 0;
     this.combatT = 0; this.protUntil = o.local && !o.bot ? NOW() + 3000 : 0; this.eatT = 0; this.flashT = 0;
     this.moving = false; this.sprint = false; this.walk = 0; this.amp = 0; this.seed = Math.random() * 10;
-    this.lastSeen = NOW(); this.peer = null; this.lastAtkFlag = 0;
+    this.lastSeen = NOW(); this.peer = null; this.lastAtkFlag = 0; this.lastSpFlag = 0;
+    this.stunT = 0; this.slowT = 0; this.shieldT = 0; this.stunImm = 0; this.kvx = 0; this.kvz = 0; this.combo = 0; this.spFlagT = 0; this.ringT = 0; this.phase = ''; this.hits = 0; this.orbit = 1; this.orbitT = 2; this.home = null;
     this.label = o.self || o.preview ? null : makeLabel();
     this.think = 0; this.wx = this.x; this.wz = this.z; this.target = null; this.flee = false; this.aggro = null;
   }
   get scale() { return growthScale(this.g); }
   maxHp() { return this.S.hp * statMul(this.g); }
-  dmg() { return this.S.dmg * statMul(this.g) * (this.bot ? 0.8 : 1); }
+  over() { return this.sp === 'rex' && this.frac() < 0.4; } // Разгон реактора
+  dmg() { return this.S.dmg * statMul(this.g) * (this.bot ? 0.8 : 1) * (this.over() ? 1.35 : 1); }
   radius() { return this.S.r * this.scale; }
   frac() { return this.local ? this.hp / this.maxHp() : this.hpFrac; }
-  speed(run) { return (run ? this.S.run : this.S.spd) * (0.8 + 0.3 * Math.min(this.g, 1)) * (inWater(this.x, this.z) ? 0.6 : 1); }
+  speed(run) { return (run ? this.S.run : this.S.spd) * (0.8 + 0.3 * Math.min(this.g, 1)) * (inWater(this.x, this.z) && this.sp !== 'spino' ? 0.6 : 1) * (this.slowT > 0 ? 0.55 : 1); }
   setGrowth(g) { const f = this.hp / this.maxHp(); this.g = Math.min(1, g); this.hp = f * this.maxHp(); }
   flash() { this.flashT = 0.09; }
   visual(dt, time) {
@@ -111,7 +113,17 @@ class Mech {
       const k = Math.sin((1 - this.atkAnim) * Math.PI);
       m.head.rotation.x = k * 0.5; m.head.position.z = m.headZ + k * 0.6;
     } else {
-      m.head.rotation.x = Math.sin(time * 0.9 + this.seed) * 0.04; m.head.position.z = m.headZ;
+      // робот: голова сканирует местность рывками, как сервопривод
+      const st = Math.round(Math.sin(time * 0.5 + this.seed) * 2) / 2;
+      m.head.rotation.y += (st * 0.4 - m.head.rotation.y) * Math.min(1, dt * 10);
+      m.head.rotation.x = Math.round(Math.sin(time * 0.9 + this.seed) * 3) / 3 * 0.05; m.head.position.z = m.headZ;
+    }
+    if (this.stunT > 0) m.head.rotation.z = Math.sin(time * 40) * 0.12; else m.head.rotation.z = 0;
+    this.ringT -= dt;
+    if (this.ringT <= 0) {
+      if (this.shieldT > 0) { this.ringT = 0.45; ring(this.x, this.y, this.z, this.radius() * 1.5, '#66ccff'); }
+      else if (this.over()) { this.ringT = 0.3; sparks(this.x, this.y + this.S.h * s * 0.7, this.z, 0.5, 2); }
+      else if (this.stunT > 0) { this.ringT = 0.15; sparks(this.x, this.y + this.S.h * s, this.z, 0.5, 2); }
     }
     if (this.flashT > 0) { this.flashT -= dt; setFlash(m, this.flashT > 0); }
     if (this.label) {
@@ -142,6 +154,22 @@ function sparks(x, y, z, s = 1, n = 8, up = 1) {
     p.vx = (Math.random() - 0.5) * 10 * s; p.vy = (2 + Math.random() * 7) * s * up; p.vz = (Math.random() - 0.5) * 10 * s; p.g = 22;
   }
 }
+const boltGeo = new THREE.BoxGeometry(0.14, 0.14, 1).translate(0, 0, 0.5);
+const bolts = [];
+for (let i = 0; i < 24; i++) { const m = new THREE.Mesh(boltGeo, new THREE.MeshBasicMaterial({ color: 0x7af6ff })); m.visible = false; scene.add(m); bolts.push({ m, life: 0 }); }
+let boltI = 0;
+const _b1 = new THREE.Vector3(), _b2 = new THREE.Vector3();
+function bolt(x1, y1, z1, x2, y2, z2, color = '#7af6ff') {
+  let px = x1, py = y1, pz = z1;
+  for (let i = 1; i <= 3; i++) {
+    const k = i / 3, j = i < 3 ? 0.7 : 0;
+    const nx = x1 + (x2 - x1) * k + (Math.random() - 0.5) * j, ny = y1 + (y2 - y1) * k + (Math.random() - 0.5) * j, nz = z1 + (z2 - z1) * k + (Math.random() - 0.5) * j;
+    const b = bolts[boltI++ % bolts.length];
+    b.life = 0.16; b.m.visible = true; b.m.material.color.set(color);
+    b.m.position.set(px, py, pz); _b2.set(nx, ny, nz); b.m.lookAt(_b2); b.m.scale.z = Math.max(0.1, _b1.set(nx - px, ny - py, nz - pz).length());
+    px = nx; py = ny; pz = nz;
+  }
+}
 const ringGeo = new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2);
 const rings = [];
 for (let i = 0; i < 6; i++) {
@@ -161,6 +189,7 @@ function updateFx(dt) {
     p.m.rotation.x += dt * 8;
     if (p.life <= 0) p.m.visible = false;
   }
+  for (const b of bolts) { if (b.life <= 0) continue; b.life -= dt; if (b.life <= 0) b.m.visible = false; }
   for (const r of rings) {
     if (r.life <= 0) continue;
     r.life -= dt; const k = 1 - r.life / 0.45;
@@ -176,7 +205,7 @@ const _pv = new THREE.Vector3();
 function dmgNum(x, y, z, val, mine) {
   const n = nums[numI++ % nums.length];
   n.life = 0.9; n.p.set(x + (Math.random() - 0.5), y, z + (Math.random() - 0.5));
-  n.el.textContent = '-' + val; n.el.className = 'dmg ' + (mine ? 'mine' : 'hurt');
+  n.el.textContent = typeof val === 'number' ? '-' + val : val; n.el.className = 'dmg ' + (mine ? 'mine' : 'hurt');
 }
 function updateNums(dt) {
   for (const n of nums) {
@@ -210,7 +239,7 @@ function autoAim(a, reach) {
   if (t) a.rot = Math.atan2(t.x - a.x, t.z - a.z);
 }
 
-function dealDamage(a, t, amount) {
+function dealDamage(a, t, amount, f) {
   if (!t || t.dead) return;
   amount = Math.round(amount);
   const hy = t.y + t.S.h * 0.55 * t.scale;
@@ -218,48 +247,111 @@ function dealDamage(a, t, amount) {
   t.flash();
   a.combatT = 6;
   if (a === me) { dmgNum(t.x, hy + 1, t.z, amount, true); sfx.clank(1); }
-  if (t.local) applyDamage(t, amount, a.id, a.name);
-  else if (net && t.peer) net.hit(t.peer, { t: t.id, d: amount, b: a.id, n: a.name });
+  if (t.local) applyDamage(t, amount, a.id, a.name, f);
+  else if (net && t.peer) net.hit(t.peer, f ? { t: t.id, d: amount, b: a.id, n: a.name, f } : { t: t.id, d: amount, b: a.id, n: a.name });
+}
+
+const bodyPt = a => [a.x, a.y + a.S.h * 0.65 * a.scale, a.z];
+// Обычный удар у каждого меха свой
+function primary(a, reach) {
+  const S = a.S, type = S.atk.type, d = a.dmg();
+  let hit = false;
+  if (type === 'sweep') { // Стего: хвостовой разворот по всем вокруг
+    const R = reach * 0.95;
+    for (const e of ents.values()) {
+      if (e === a || e.dead) continue;
+      if (Math.hypot(e.x - a.x, e.z - a.z) - e.radius() < R) { dealDamage(a, e, d * 0.75, { kb: 2 }); hit = true; }
+    }
+    ring(a.x, a.y, a.z, R, S.glow);
+  } else if (type === 'arc') { // Спино: дуга разряда бьёт издалека и перескакивает
+    const t = nearestInFront(a, reach, 0.5);
+    if (t) {
+      hit = true; dealDamage(a, t, d * 0.8, { sl: 1.2 }); bolt(...bodyPt(a), ...bodyPt(t));
+      let n2 = null, nd = 7 * a.scale;
+      for (const e of ents.values()) { if (e === a || e === t || e.dead) continue; const dd = Math.hypot(e.x - t.x, e.z - t.z); if (dd < nd) { nd = dd; n2 = e; } }
+      if (n2) { dealDamage(a, n2, d * 0.4, { sl: 1.2 }); bolt(...bodyPt(t), ...bodyPt(n2)); }
+    } else bolt(...bodyPt(a), a.x + Math.sin(a.rot) * reach, a.y + a.S.h * 0.5 * a.scale, a.z + Math.cos(a.rot) * reach);
+  } else {
+    const t = nearestInFront(a, reach);
+    if (t) {
+      hit = true; let m = 1, f = null;
+      if (type === 'combo') { a.combo = (a.combo + 1) % 3; if (a.combo === 2) { m = 1.7; sparks(t.x, t.y + 1, t.z, 1.2, 10); } } // Раптор: каждый 3-й удар — добивающий
+      if (type === 'gore') f = { kb: 4 };                                                                                       // Трицера: отбрасывание
+      dealDamage(a, t, d * m, f);
+    }
+  }
+  if (a === me && !hit) sfx.clank(0.3);
+}
+
+// Визуальный эффект спецприёма (виден и у чужих игроков)
+function specialFx(a) {
+  const S = a.S, sp = S.special, reach = S.reach * a.scale;
+  if (camera.position.distanceTo(a.m.root.position) > 60) return;
+  if (sp.type === 'heavy') ring(a.x + Math.sin(a.rot) * reach * 0.7, a.y, a.z + Math.cos(a.rot) * reach * 0.7, 2.5 * a.scale, S.glow);
+  else if (sp.type === 'area') {
+    const R = sp.radius * a.scale;
+    ring(a.x, a.y, a.z, R, S.glow); ring(a.x, a.y + 0.3, a.z, R * 0.7, '#ffffff');
+    if (a.sp === 'spino') for (let i = 0; i < 5; i++) { const an = i * 1.256 + Math.random(), r = R * 0.85; bolt(...bodyPt(a), a.x + Math.sin(an) * r, a.y + 0.5, a.z + Math.cos(an) * r); }
+  }
 }
 
 function attack(a, special) {
-  if (!a || a.dead) return;
+  if (!a || a.dead || a.stunT > 0) return;
   const S = a.S, reach = S.reach * a.scale;
   if (!special) {
     if (a.atkT > 0) return;
     if (a === me) autoAim(a, reach);
-    a.atkT = S.cd; a.atkAnim = 1; a.atkFlagT = 0.3;
-    const t = nearestInFront(a, reach);
-    if (t) dealDamage(a, t, a.dmg());
-    else if (a === me) sfx.clank(0.3);
+    a.atkT = S.cd * (a.over() ? 0.75 : 1); a.atkAnim = 1; a.atkFlagT = 0.3;
+    primary(a, reach);
     return;
   }
   if (a.spT > 0) return;
   const sp = S.special;
   if (a === me && sp.type !== 'area') autoAim(a, reach * (sp.type === 'dash' ? 3 : 1));
-  a.spT = sp.cd; a.atkAnim = 1; a.atkFlagT = 0.4;
+  a.spT = sp.cd; a.atkAnim = 1; a.atkFlagT = 0.4; a.spFlagT = 0.4;
   const near = a === me || camera.position.distanceTo(a.m.root.position) < 45;
   if (near) sfx.roar(a.sp === 'raptor' ? 1.8 : 1, a === me ? 1 : 0.45);
   if (sp.type === 'heavy') {
     const t = nearestInFront(a, reach * 1.15, 1.3);
-    if (t) dealDamage(a, t, a.dmg() * sp.mult);
-    if (near) ring(a.x + Math.sin(a.rot) * reach * 0.7, a.y, a.z + Math.cos(a.rot) * reach * 0.7, 2.5 * a.scale, S.glow);
+    if (t) dealDamage(a, t, a.dmg() * sp.mult, sp.fx);
   } else if (sp.type === 'area') {
     const R = sp.radius * a.scale;
     for (const e of ents.values()) {
       if (e === a || e.dead) continue;
-      if (Math.hypot(e.x - a.x, e.z - a.z) - e.radius() < R) dealDamage(a, e, a.dmg() * sp.mult);
+      if (Math.hypot(e.x - a.x, e.z - a.z) - e.radius() < R) dealDamage(a, e, a.dmg() * sp.mult, sp.fx);
     }
-    if (near) { ring(a.x, a.y, a.z, R, S.glow); ring(a.x, a.y + 0.3, a.z, R * 0.7, '#ffffff'); }
+    if (sp.shield) a.shieldT = sp.shield; // Стего: режим бастиона
   } else if (sp.type === 'dash') {
     a.dashT = sp.dur; a.dashHit = new Set();
   }
+  if (near) specialFx(a);
 }
 
-function applyDamage(t, dmg, byId, byName) {
+const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, +v || 0));
+function applyDamage(t, dmg, byId, byName, f) {
   if (t.dead || NOW() < t.protUntil) return;
+  f = f || {};
+  const att = ents.get(byId);
+  if (t.sp === 'raptor' && !f.th && Math.random() < 0.22) { // Реактивное уклонение
+    dmgNum(t.x, t.y + t.S.h * t.scale + 0.5, t.z, 'УКЛОН', t === me);
+    sparks(t.x, t.y + 1, t.z, 0.5, 4, 0.4); return;
+  }
+  if (t.sp === 'trike' && att && Math.abs(angDiff(t.rot, Math.atan2(att.x - t.x, att.z - t.z))) < 0.9) dmg *= 0.6; // фронтальная броня
+  if (t.shieldT > 0) dmg *= 0.5;
+  dmg = Math.round(dmg);
   t.hp -= dmg; t.combatT = 6; t.flash();
-  if (t === me) { shake = 0.35; sfx.hurt(); flashVignette(); dmgNum(me.x, me.y + me.S.h * me.scale + 0.5, me.z, Math.round(dmg), false); }
+  if (f.s && t.stunImm <= 0) { t.stunT = Math.max(t.stunT, f.s); t.stunImm = f.s + 2; t.dashT = 0; if (t === me) toast('⚡ Системы обесточены!'); }
+  if (f.sl) t.slowT = Math.max(t.slowT, f.sl);
+  if (f.kb && att) { const dx = t.x - att.x, dz = t.z - att.z, dd = Math.hypot(dx, dz) || 1; t.kvx += dx / dd * f.kb * 3; t.kvz += dz / dd * f.kb * 3; }
+  if (t.sp === 'stego' && att && !att.dead && !f.th && att !== t) { // Шипы-контрудар
+    const r = Math.round(dmg * 0.15);
+    if (r > 0) {
+      sparks(att.x, att.y + 1, att.z, 0.6, 4);
+      if (att.local) applyDamage(att, r, t.id, t.name, { th: 1 });
+      else if (net && att.peer) net.hit(att.peer, { t: att.id, d: r, b: t.id, n: t.name, f: { th: 1 } });
+    }
+  }
+  if (t === me) { shake = 0.35; sfx.hurt(); flashVignette(); dmgNum(me.x, me.y + me.S.h * me.scale + 0.5, me.z, dmg, false); }
   if (t.bot) t.aggro = byId;
   if (t.hp <= 0) killEnt(t, byId, byName);
 }
@@ -316,14 +408,23 @@ const handlers = {
       e.tx = x; e.tz = z; e.trot = rot; e.g = Math.max(0, Math.min(1, +g || 0)); e.hpFrac = hp; e.kills = kills | 0;
       e.moving = (flags & 1) !== 0; e.sprint = (flags & 4) !== 0;
       const af = flags & 2;
-      if (af && !e.lastAtkFlag) e.atkAnim = 1;
-      e.lastAtkFlag = af;
+      const sf = flags & 16;
+      if (af && !e.lastAtkFlag) {
+        e.atkAnim = 1;
+        if (e.sp === 'spino' && !sf) { const t = nearestInFront(e, e.S.reach * e.scale, 0.5); if (t) bolt(...bodyPt(e), ...bodyPt(t)); }
+      }
+      if (sf && !e.lastSpFlag) specialFx(e);
+      e.lastAtkFlag = af; e.lastSpFlag = sf;
+      e.shieldT = (flags & 32) ? 0.5 : 0;
     }
     for (const e of ents.values()) if (!e.local && e.peer === peerId && !seen.has(e.id)) { ents.delete(e.id); e.dispose(); }
   },
   onHit(d) {
     const t = ents.get(d && d.t);
-    if (t && t.local) applyDamage(t, Math.max(0, Math.min(5000, +d.d || 0)), String(d.b), String(d.n || '?').slice(0, 16));
+    if (t && t.local) {
+      const f = d.f && typeof d.f === 'object' ? { s: clampN(d.f.s, 0, 2), sl: clampN(d.f.sl, 0, 3), kb: clampN(d.f.kb, 0, 12), th: d.f.th ? 1 : 0 } : null;
+      applyDamage(t, Math.max(0, Math.min(5000, +d.d || 0)), String(d.b), String(d.n || '?').slice(0, 16), f);
+    }
   },
   onKill(d) {
     if (!d || typeof d.id !== 'string') return;
@@ -361,7 +462,7 @@ function sendState() {
   const e = [];
   for (const d of ents.values()) {
     if (!d.local || d.dead) continue;
-    const flags = (d.moving ? 1 : 0) | (d.atkFlagT > 0 ? 2 : 0) | (d.sprint ? 4 : 0) | (d.bot ? 8 : 0);
+    const flags = (d.moving ? 1 : 0) | (d.atkFlagT > 0 ? 2 : 0) | (d.sprint ? 4 : 0) | (d.bot ? 8 : 0) | (d.spFlagT > 0 ? 16 : 0) | (d.shieldT > 0 ? 32 : 0);
     e.push([d.id, SP_KEYS.indexOf(d.sp), d.name, r1(d.x), r1(d.z), r2(d.rot), r2(d.g), r2(Math.max(0, d.hp / d.maxHp())), flags, d.kills]);
   }
   net.state({ c: clientId, e });
@@ -402,6 +503,7 @@ function spawnBot() {
 
 // ================= Движение (общее для игрока и ботов) =================
 function moveMech(d, mx, mz, run, dt) {
+  if (d.stunT > 0) { mx = 0; mz = 0; run = false; d.dashT = 0; }
   const mag = Math.min(1, Math.hypot(mx, mz));
   d.moving = mag > 0.08 || d.dashT > 0;
   d.sprint = run && d.moving && d.st > 2;
@@ -413,8 +515,9 @@ function moveMech(d, mx, mz, run, dt) {
     if (Math.random() < 0.6) sparks(d.x - Math.sin(d.rot) * d.radius(), d.y + d.S.h * 0.4 * d.scale, d.z - Math.cos(d.rot) * d.radius(), d.scale * 0.8, 1, 0.3);
     for (const e of ents.values()) {
       if (e === d || e.dead || d.dashHit.has(e.id)) continue;
-      if (Math.hypot(e.x - d.x, e.z - d.z) < d.radius() + e.radius() + 0.8 * d.scale) { d.dashHit.add(e.id); dealDamage(d, e, d.dmg() * d.S.special.mult); }
+      if (Math.hypot(e.x - d.x, e.z - d.z) < d.radius() + e.radius() + 0.8 * d.scale) { d.dashHit.add(e.id); dealDamage(d, e, d.dmg() * d.S.special.mult, d.S.special.fx); }
     }
+    if (d.dashT <= 0 && d.sp === 'raptor') d.atkT = 0; // после прыжка удар готов сразу
   } else if (d.moving) {
     const want = Math.atan2(mx, mz);
     const turn = (d.sp === 'raptor' ? 12 : 7) * dt;
@@ -422,6 +525,11 @@ function moveMech(d, mx, mz, run, dt) {
     d.rot += Math.max(-turn, Math.min(turn, df));
     const sp = d.speed(d.sprint) * mag * (Math.abs(df) > 1.6 ? 0.4 : 1);
     d.x += Math.sin(d.rot) * sp * dt; d.z += Math.cos(d.rot) * sp * dt;
+  }
+  if (d.kvx || d.kvz) { // отбрасывание
+    d.x += d.kvx * dt; d.z += d.kvz * dt;
+    const k = Math.exp(-6 * dt); d.kvx *= k; d.kvz *= k;
+    if (Math.abs(d.kvx) + Math.abs(d.kvz) < 0.1) d.kvx = d.kvz = 0;
   }
   for (const e of ents.values()) {
     if (e === d || e.dead) continue;
@@ -440,7 +548,9 @@ function levelUp(d) {
 }
 
 function tickCommon(d, dt) {
-  d.atkT -= dt; d.spT -= dt; d.atkFlagT -= dt; d.combatT -= dt;
+  d.atkT -= dt; d.spT -= dt; d.atkFlagT -= dt; d.combatT -= dt; d.spFlagT -= dt;
+  d.stunT -= dt; d.slowT -= dt; d.shieldT -= dt; d.stunImm -= dt;
+  if (d.sp === 'spino' && inWater(d.x, d.z)) d.hp = Math.min(d.maxHp(), d.hp + d.maxHp() * 0.04 * dt); // водяное охлаждение
   if (mode === 'grow' && d.g < 1) {
     const before = stageIndex(d.g);
     d.setGrowth(d.g + 0.009 * dt);
@@ -464,52 +574,89 @@ function tickCommon(d, dt) {
   }
 }
 
-// ================= ИИ ботов =================
+// ================= ИИ ботов: у каждого меха свой характер =================
+const AI_RANGE = { brawler: 32, skirmisher: 30, sniper: 30, rammer: 12, bastion: 16 };
+const AI_FLEE = { brawler: 0.12, skirmisher: 0.35, sniper: 0.25, rammer: 0.2, bastion: 0.15 };
 function botAI(b, dt) {
+  const ai = b.S.ai;
+  if (!b.home) b.home = { x: b.x, z: b.z };
   b.think -= dt;
   if (b.think <= 0) {
     b.think = 0.35 + Math.random() * 0.3;
+    b.flee = false;
     let tgt = null;
     if (b.aggro) { const a = ents.get(b.aggro); if (a && !a.dead && Math.hypot(a.x - b.x, a.z - b.z) < 50) tgt = a; else b.aggro = null; }
-    // не больше двух ботов на одну цель
-    const hunters = new Map();
-    for (const o of ents.values()) if (o.bot && o !== b && o.target && !o.flee) hunters.set(o.target.id, (hunters.get(o.target.id) || 0) + 1);
-    let nearest = null, nd = 1e9;
-    for (const e of ents.values()) {
-      if (e === b || e.dead) continue;
-      if ((hunters.get(e.id) || 0) >= 2) continue;
-      if (e.bot && Math.random() < 0.35) continue;
-      const d = Math.hypot(e.x - b.x, e.z - b.z);
-      if (d < nd) { nd = d; nearest = e; }
-    }
-    b.flee = false;
-    if (!tgt && nearest) {
-      if (b.S.diet === 'carn' && nd < 28) tgt = nearest;
-      else if (b.S.diet === 'herb' && nearest.S.diet === 'carn' && nd < 14) {
-        if (b.g < nearest.g * 0.8) { tgt = nearest; b.flee = true; } else if (nd < 8) tgt = nearest;
+    if (!tgt) {
+      const hunters = new Map(); // не больше двух ботов на одну цель
+      for (const o of ents.values()) if (o.bot && o !== b && o.target && !o.flee) hunters.set(o.target.id, (hunters.get(o.target.id) || 0) + 1);
+      let best = null, bs = 1e9;
+      for (const e of ents.values()) {
+        if (e === b || e.dead || (hunters.get(e.id) || 0) >= 2) continue;
+        if (e.bot && Math.random() < 0.35) continue;
+        const d = Math.hypot(e.x - b.x, e.z - b.z);
+        if (d > AI_RANGE[ai]) continue;
+        const score = ai === 'skirmisher' ? d * 0.5 + e.frac() * 40 : d; // налётчик выбирает раненых
+        if (score < bs) { bs = score; best = e; }
       }
+      tgt = best;
     }
-    if (tgt && b.hp < b.maxHp() * 0.22 && Math.random() < 0.7) b.flee = true;
+    if (ai === 'bastion' && tgt && Math.hypot(tgt.x - b.home.x, tgt.z - b.home.z) > 24) tgt = null; // бастион не уходит от точки
+    if (tgt && b.hp < b.maxHp() * AI_FLEE[ai] && Math.random() < 0.7) b.flee = true;
     b.target = tgt;
-    if (!tgt && Math.hypot(b.wx - b.x, b.wz - b.z) < 6) [b.wx, b.wz] = world.randLand();
+    if (!tgt) {
+      if (ai === 'bastion') { // не гонится: живёт возле своей точки, иногда переставляет её
+        if (Math.random() < 0.05) b.home = { x: b.x, z: b.z };
+        if (Math.hypot(b.wx - b.x, b.wz - b.z) < 4) { const an = Math.random() * 6.28, r = 4 + Math.random() * 10; b.wx = b.home.x + Math.sin(an) * r; b.wz = b.home.z + Math.cos(an) * r; }
+      } else if (Math.hypot(b.wx - b.x, b.wz - b.z) < 6) [b.wx, b.wz] = world.randLand();
+    }
   }
   let mx = 0, mz = 0, run = false;
   const t = b.target && !b.target.dead && ents.has(b.target.id) ? b.target : null;
   if (t) {
-    const dx = t.x - b.x, dz = t.z - b.z, d = Math.hypot(dx, dz) || 1;
-    if (b.flee) { mx = -dx / d; mz = -dz / d; run = b.st > 20; }
-    else {
-      const reach = b.S.reach * b.scale + t.radius();
-      if (d > reach * 0.85) { mx = dx / d; mz = dz / d; run = d > 12 && b.st > 30; }
-      else {
-        const df = angDiff(b.rot, Math.atan2(dx, dz)); b.rot += Math.max(-6 * dt, Math.min(6 * dt, df));
-        if (Math.abs(df) < 0.6) { if (b.spT <= 0 && Math.random() < 0.02) attack(b, true); else attack(b, false); }
+    const dx = t.x - b.x, dz = t.z - b.z, d = Math.hypot(dx, dz) || 1, ang = Math.atan2(dx, dz);
+    const reach = b.S.reach * b.scale + t.radius();
+    const off = Math.abs(angDiff(b.rot, ang));
+    const face = () => { b.rot += Math.max(-7 * dt, Math.min(7 * dt, angDiff(b.rot, ang))); };
+    const fwd = (k = 1) => { mx = dx / d * k; mz = dz / d * k; };
+    const back = () => { mx = -dx / d; mz = -dz / d; };
+    const side = k => { mx = -dz / d * b.orbit * k; mz = dx / d * b.orbit * k; };
+    if (b.flee) { back(); run = b.st > 20; }
+    else if (ai === 'brawler') { // Рекс: давит напролом
+      if (d > reach * 0.85) { fwd(); run = d > 12 && b.st > 30; }
+      else { face(); if (off < 0.6) { if (b.spT <= 0 && Math.random() < 0.06) attack(b, true); else attack(b, false); } }
+    } else if (ai === 'skirmisher') { // Раптор: 3 удара — отскок по кругу, прыжок для сближения
+      if (b.phase === 'retreat') {
+        b.phaseT -= dt; back(); const bx = mx, bz = mz; side(1); mx = mx * 0.8 + bx * 0.6; mz = mz * 0.8 + bz * 0.6; run = b.st > 15;
+        if (b.phaseT <= 0) { b.phase = 'strike'; b.hits = 0; }
+      } else if (d > reach * 0.85) {
+        fwd(); run = b.st > 20;
+        if (b.spT <= 0 && d < 16 && d > 5 && off < 0.2) attack(b, true);
+      } else {
+        face();
+        if (off < 0.6 && b.atkT <= 0) { attack(b, false); if (++b.hits >= 3) { b.phase = 'retreat'; b.phaseT = 1.0 + Math.random() * 0.6; b.orbit = Math.random() < 0.5 ? 1 : -1; } }
       }
-      if (b.S.special.type === 'dash' && b.spT <= 0 && d < 14 && d > reach && Math.abs(angDiff(b.rot, Math.atan2(dx, dz))) < 0.2) attack(b, true);
+    } else if (ai === 'sniper') { // Спино: держит дистанцию и кружит
+      b.orbitT -= dt; if (b.orbitT <= 0) { b.orbit = -b.orbit; b.orbitT = 2.5 + Math.random() * 1.5; }
+      const want = b.S.reach * b.scale * 0.75;
+      if (d < want * 0.5) { back(); run = b.st > 25; if (b.spT <= 0) attack(b, true); } // вплотную — ЭМИ
+      else if (d > want * 1.25) fwd();
+      else side(0.7);
+      if (d < want * 1.3) { face(); if (off < 0.5) attack(b, false); }
+    } else if (ai === 'rammer') { // Трицера: разгоняется и таранит
+      if (d > reach * 0.85) { fwd(); run = d > 10 && b.st > 30; if (b.spT <= 0 && d > 6 && d < 20 && off < 0.25) attack(b, true); }
+      else { face(); if (off < 0.6) attack(b, false); }
+    } else { // bastion — Стего: стоит на месте и ждёт
+      const hd = Math.hypot(b.home.x - b.x, b.home.z - b.z);
+      if (hd > 20) { mx = (b.home.x - b.x) / hd; mz = (b.home.z - b.z) / hd; }
+      else if (d > reach * 0.85) { if (d < reach * 1.8) fwd(0.7); else face(); }
+      else { face(); if (off < 0.8) attack(b, false); }
+      const R = b.S.special.radius * b.scale * 0.9;
+      if (b.spT <= 0 && d < R && (b.hp < b.maxHp() * 0.7 || Math.random() < 0.03)) attack(b, true);
     }
   } else {
     const dx = b.wx - b.x, dz = b.wz - b.z, d = Math.hypot(dx, dz) || 1;
-    mx = dx / d * 0.55; mz = dz / d * 0.55;
+    const k = ai === 'bastion' ? 0.35 : 0.55;
+    mx = dx / d * k; mz = dz / d * k;
   }
   moveMech(b, mx, mz, run, dt);
 }
@@ -736,14 +883,18 @@ function renderCards() {
     const bar = (v, m) => `<i><b style="width:${Math.round(v / m * 100)}%;background:${S.glow}"></b></i>`;
     return `<button class="card ${k === chosen ? 'sel' : ''}" data-k="${k}" style="--g:${S.glow}">
       <div class="cn">${S.name}</div>
-      <div class="cd">${S.diet === 'carn' ? '🔩 Хищник' : '💎 Травоядный'}</div>
+      <div class="cd">${S.diet === 'carn' ? '🔩 Металлолом' : '💎 Кристаллы'}</div>
       <div class="st"><em>HP</em>${bar(S.hp, max.hp)}</div>
       <div class="st"><em>УРН</em>${bar(S.dmg, max.dmg)}</div>
       <div class="st"><em>СКР</em>${bar(S.run, max.run)}</div>
     </button>`;
   }).join('');
   const S = SPECIES[chosen];
-  $('desc').innerHTML = `${S.desc} <b style="color:${S.glow}">✨ ${S.special.name}</b>`;
+  $('desc').innerHTML = `${S.desc}
+    <div class="tr"><b>⚔️ ${S.atk.name}:</b> ${S.atk.info}</div>
+    <div class="tr"><b style="color:${S.glow}">✨ ${S.special.name}:</b> ${S.special.info}</div>
+    <div class="tr"><b>🛡 ${S.passive.name}:</b> ${S.passive.info}</div>
+    <div class="tr"><b>🧠 Стиль:</b> ${S.aiInfo}</div>`;
   document.querySelectorAll('.card').forEach(b => b.onclick = () => { chosen = b.dataset.k; renderCards(); });
   document.querySelectorAll('.mode').forEach(b => {
     b.classList.toggle('sel', b.dataset.m === chosenMode);
