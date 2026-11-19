@@ -81,7 +81,7 @@ class Mech {
     this.combatT = 0; this.protUntil = o.local && !o.bot ? NOW() + 3000 : 0; this.eatT = 0; this.flashT = 0;
     this.moving = false; this.sprint = false; this.walk = 0; this.amp = 0; this.seed = Math.random() * 10;
     this.lastSeen = NOW(); this.peer = null; this.lastAtkFlag = 0; this.lastSpFlag = 0;
-    this.stunT = 0; this.slowT = 0; this.shieldT = 0; this.stunImm = 0; this.kvx = 0; this.kvz = 0; this.combo = 0; this.spFlagT = 0; this.ringT = 0; this.phase = ''; this.hits = 0; this.orbit = 1; this.orbitT = 2; this.home = null;
+    this.stunT = 0; this.slowT = 0; this.shieldT = 0; this.stunImm = 0; this.kvx = 0; this.kvz = 0; this.combo = 0; this.spFlagT = 0; this.ringT = 0; this.latch = null; this.sawT = 0; this.sawTick = 0; this.sawVis = 0; this.tailT = 0; this.hopT = 0; this.clung = false; this.vsp = 0; this.dir = 1; this.wasLatch = false; this.phase = ''; this.hits = 0; this.orbit = 1; this.orbitT = 2; this.home = null;
     this.label = o.self || o.preview ? null : makeLabel();
     this.think = 0; this.wx = this.x; this.wz = this.z; this.target = null; this.flee = false; this.aggro = null;
   }
@@ -97,7 +97,10 @@ class Mech {
   visual(dt, time) {
     const m = this.m, s = this.scale;
     this.y = height(this.x, this.z);
-    m.root.position.set(this.x, Math.max(this.y, WATER_Y - 1.2 * s), this.z);
+    let up = 0;
+    if (this.hopT > 0) { this.hopT -= dt; const sp = this.S.special; up += Math.sin(Math.PI * Math.max(0, 1 - this.hopT / sp.dur)) * sp.hop * s; }
+    if (this.local ? !!(this.latch && this.latch.kind === 'cling') : this.clung) up += 2.2;
+    m.root.position.set(this.x, Math.max(this.y, WATER_Y - 1.2 * s) + up, this.z);
     m.root.rotation.y = this.rot;
     m.root.scale.setScalar(s);
     const target = this.moving ? (this.sprint ? 0.7 : 0.48) : 0;
@@ -108,16 +111,32 @@ class Mech {
     // механическая походка: корпус чуть качается
     m.body.position.y = Math.abs(Math.sin(this.walk)) * 0.1 * this.amp;
     m.body.rotation.z = Math.sin(this.walk) * 0.04 * this.amp;
+    // у каждого робота своя анимация атаки
+    const type = this.S.atk.type;
+    m.body.rotation.x = 0; m.body.rotation.y = 0; m.body.position.z = 0;
+    let tailAdd = 0;
     if (this.atkAnim > 0) {
-      this.atkAnim = Math.max(0, this.atkAnim - dt * 3);
-      const k = Math.sin((1 - this.atkAnim) * Math.PI);
-      m.head.rotation.x = k * 0.5; m.head.position.z = m.headZ + k * 0.6;
+      this.atkAnim = Math.max(0, this.atkAnim - dt * (this.S.atk.anim || 3));
+      const u = 1 - this.atkAnim, k = Math.sin(u * Math.PI);
+      if (type === 'bite') { m.head.rotation.x = k * 0.5; m.head.position.z = m.headZ + k * 0.6; m.body.rotation.x = k * 0.06; }
+      else if (type === 'combo') { m.head.rotation.x = k * 0.3; m.head.position.z = m.headZ + k * 0.5; m.body.rotation.y = (this.combo % 2 ? 1 : -1) * k * 0.45; }
+      else if (type === 'gore') { m.head.rotation.x = k * 0.8; m.head.position.z = m.headZ + k * 0.9; m.body.position.z = k * 0.5; m.body.rotation.x = k * 0.1; }
+      else if (type === 'tail') { // замах назад, затем хлёст
+        tailAdd = (u < 0.5 ? -Math.sin(u * 2 * Math.PI) * 0.7 : Math.sin((u - 0.5) * 2 * Math.PI) * 1.5) * this.dir;
+        m.body.rotation.y = -k * 0.25 * this.dir; m.head.rotation.x = 0; m.head.position.z = m.headZ;
+      } else { m.head.rotation.x = k * 0.2; m.head.position.z = m.headZ + k * 0.3; }
     } else {
       // робот: голова сканирует местность рывками, как сервопривод
       const st = Math.round(Math.sin(time * 0.5 + this.seed) * 2) / 2;
       m.head.rotation.y += (st * 0.4 - m.head.rotation.y) * Math.min(1, dt * 10);
       m.head.rotation.x = Math.round(Math.sin(time * 0.9 + this.seed) * 3) / 3 * 0.05; m.head.position.z = m.headZ;
     }
+    if (this.sawVis > 0) { // хвост-пила раскручивается
+      this.sawVis -= dt;
+      const u = 1 - Math.max(0, this.sawVis) / (this.S.atk.spin || 0.7);
+      tailAdd = u * Math.PI * 4; m.body.rotation.y = Math.sin(u * Math.PI * 4) * 0.12;
+    }
+    m.tail.rotation.y += tailAdd;
     if (this.stunT > 0) m.head.rotation.z = Math.sin(time * 40) * 0.12; else m.head.rotation.z = 0;
     this.ringT -= dt;
     if (this.ringT <= 0) {
@@ -220,23 +239,26 @@ function updateNums(dt) {
 }
 
 // ================= Бой =================
-function nearestInFront(a, reach, cone = 1.1) {
+function nearestInFront(a, reach, cone = 1.1, back = false) {
   let best = null, bd = 1e9;
   for (const e of ents.values()) {
     if (e === a || e.dead) continue;
     const dx = e.x - a.x, dz = e.z - a.z, d = Math.hypot(dx, dz) - e.radius();
     if (d > reach) continue;
-    const ang = Math.abs(angDiff(a.rot, Math.atan2(dx, dz)));
+    const ang = Math.abs(angDiff(back ? a.rot + Math.PI : a.rot, Math.atan2(dx, dz)));
     if (ang > cone && d > a.radius() * 0.3) continue;
     if (d < bd) { bd = d; best = e; }
   }
   return best;
 }
 // Автонаведение: если впереди никого, но враг рядом — разворачиваемся к нему
-function autoAim(a, reach) {
-  if (nearestInFront(a, reach)) return;
+function autoAim(a, reach, rear) {
+  if (rear ? nearestInFront(a, reach, a.S.atk.arc, true) : nearestInFront(a, reach)) return;
   const t = nearestInFront(a, reach * 1.25, Math.PI);
-  if (t) a.rot = Math.atan2(t.x - a.x, t.z - a.z);
+  if (!t) return;
+  // тяжёлые роботы разворачиваются медленно — автонаведение их не телепортирует
+  const want = Math.atan2(t.x - a.x, t.z - a.z) + (rear ? Math.PI : 0), lim = a.S.turn * 0.4;
+  a.rot += Math.max(-lim, Math.min(lim, angDiff(a.rot, want)));
 }
 
 function dealDamage(a, t, amount, f) {
@@ -252,78 +274,128 @@ function dealDamage(a, t, amount, f) {
 }
 
 const bodyPt = a => [a.x, a.y + a.S.h * 0.65 * a.scale, a.z];
-// Обычный удар у каждого меха свой
+const nearEnemies = (a, R) => { const r = []; for (const e of ents.values()) if (e !== a && !e.dead && Math.hypot(e.x - a.x, e.z - a.z) - e.radius() < R) r.push(e); return r; };
+
+// Обычный удар: у каждого робота свой
 function primary(a, reach) {
-  const S = a.S, type = S.atk.type, d = a.dmg();
-  let hit = false;
-  if (type === 'sweep') { // Стего: хвостовой разворот по всем вокруг
-    const R = reach * 0.95;
-    for (const e of ents.values()) {
-      if (e === a || e.dead) continue;
-      if (Math.hypot(e.x - a.x, e.z - a.z) - e.radius() < R) { dealDamage(a, e, d * 0.75, { kb: 2 }); hit = true; }
-    }
-    ring(a.x, a.y, a.z, R, S.glow);
-  } else if (type === 'arc') { // Спино: дуга разряда бьёт издалека и перескакивает
-    const t = nearestInFront(a, reach, 0.5);
-    if (t) {
-      hit = true; dealDamage(a, t, d * 0.8, { sl: 1.2 }); bolt(...bodyPt(a), ...bodyPt(t));
-      let n2 = null, nd = 7 * a.scale;
-      for (const e of ents.values()) { if (e === a || e === t || e.dead) continue; const dd = Math.hypot(e.x - t.x, e.z - t.z); if (dd < nd) { nd = dd; n2 = e; } }
-      if (n2) { dealDamage(a, n2, d * 0.4, { sl: 1.2 }); bolt(...bodyPt(t), ...bodyPt(n2)); }
-    } else bolt(...bodyPt(a), a.x + Math.sin(a.rot) * reach, a.y + a.S.h * 0.5 * a.scale, a.z + Math.cos(a.rot) * reach);
-  } else {
-    const t = nearestInFront(a, reach);
-    if (t) {
-      hit = true; let m = 1, f = null;
-      if (type === 'combo') { a.combo = (a.combo + 1) % 3; if (a.combo === 2) { m = 1.7; sparks(t.x, t.y + 1, t.z, 1.2, 10); } } // Раптор: каждый 3-й удар — добивающий
-      if (type === 'gore') f = { kb: 4 };                                                                                       // Трицера: отбрасывание
-      dealDamage(a, t, d * m, f);
+  const S = a.S, A = S.atk, type = A.type, d = a.dmg();
+  if (type === 'saw') { // Спино: хвост-пила крутится и пилит всех вокруг
+    a.sawT = A.spin; a.sawVis = A.spin; a.sawTick = A.spin / A.ticks * 0.5; a.sawLeft = A.ticks;
+    return;
+  }
+  if (type === 'tail') { a.tailT = A.wind; a.dir = -a.dir; return; } // Стего: замах, удар придёт чуть позже
+  const t = nearestInFront(a, reach);
+  if (!t) { if (a === me) sfx.clank(0.3); return; }
+  let m = 1, f = null;
+  if (type === 'combo') { a.combo = (a.combo + 1) % 3; if (a.combo === 2) { m = 1.7; sparks(t.x, t.y + 1, t.z, 1.2, 10); } } // Раптор: каждый 3-й — добивающий
+  if (type === 'gore') f = { kb: 4 };                                                                                       // Трицера: отбрасывает
+  dealDamage(a, t, d * m, f);
+}
+
+// Отложенные и затяжные атаки (пила, хвост, захваты) — считаются у владельца робота
+function tickAttacks(d, dt) {
+  const A = d.S.atk;
+  if (d.sawT > 0) {
+    d.sawT -= dt; d.sawTick -= dt;
+    if (d.sawTick <= 0 && d.sawLeft > 0) {
+      d.sawTick += A.spin / A.ticks; d.sawLeft--;
+      const R = d.S.reach * d.scale * 0.9;
+      for (const e of nearEnemies(d, R)) dealDamage(d, e, d.dmg() * A.tickMult, { sl: 0.5 });
+      if (camera.position.distanceTo(d.m.root.position) < 50) sparks(d.x + Math.sin(d.rot + Math.PI) * 4 * d.scale, d.y + 1, d.z + Math.cos(d.rot + Math.PI) * 4 * d.scale, 0.8, 4);
     }
   }
-  if (a === me && !hit) sfx.clank(0.3);
+  if (d.tailT > 0) {
+    d.tailT -= dt;
+    if (d.tailT <= 0) { // хлёст хвостом назад
+      const R = d.S.reach * d.scale;
+      let hit = false;
+      for (const e of ents.values()) {
+        if (e === d || e.dead) continue;
+        const dx = e.x - d.x, dz = e.z - d.z, dist = Math.hypot(dx, dz) - e.radius();
+        if (dist > R) continue;
+        if (Math.abs(angDiff(d.rot + Math.PI, Math.atan2(dx, dz))) > A.arc && dist > d.radius() * 0.3) continue;
+        hit = true; dealDamage(d, e, d.dmg(), { kb: A.kb });
+      }
+      if (camera.position.distanceTo(d.m.root.position) < 50) {
+        ring(d.x - Math.sin(d.rot) * R * 0.6, d.y, d.z - Math.cos(d.rot) * R * 0.6, 2.2 * d.scale, d.S.glow);
+        if (d === me) { shake = Math.max(shake, hit ? 0.3 : 0.1); sfx.clank(hit ? 1 : 0.3); }
+      }
+    }
+  }
+  const L = d.latch;
+  if (L) { // захват: Рекс держит челюстями, Раптор сидит на спине
+    L.t -= dt; L.acc -= dt;
+    const t = ents.get(L.id);
+    if (!t || t.dead) d.latch = null;
+    else {
+      if (L.acc <= 0) { L.acc += L.tick; d.atkAnim = 1; d.atkFlagT = 0.3; dealDamage(d, t, d.dmg() * L.mult, L.fx || null); }
+      if (L.t <= 0) d.latch = null;
+    }
+  }
+  if (d.wasLatch && !d.latch && d.sp === 'raptor') { d.kvx += -Math.sin(d.rot) * 6; d.kvz += -Math.cos(d.rot) * 6; } // спрыгивает
+  d.wasLatch = !!d.latch;
 }
 
 // Визуальный эффект спецприёма (виден и у чужих игроков)
 function specialFx(a) {
   const S = a.S, sp = S.special, reach = S.reach * a.scale;
   if (camera.position.distanceTo(a.m.root.position) > 60) return;
-  if (sp.type === 'heavy') ring(a.x + Math.sin(a.rot) * reach * 0.7, a.y, a.z + Math.cos(a.rot) * reach * 0.7, 2.5 * a.scale, S.glow);
-  else if (sp.type === 'area') {
+  if (sp.type === 'clamp') ring(a.x + Math.sin(a.rot) * reach * 0.7, a.y, a.z + Math.cos(a.rot) * reach * 0.7, 2.2 * a.scale, S.glow);
+  else if (sp.type === 'leap') { a.hopT = sp.dur; sparks(a.x, a.y + 0.3, a.z, 1, 8, 0.5); ring(a.x, a.y, a.z, 2.2, S.glow); }
+  else if (sp.type === 'bolt') {
+    const t = nearestInFront(a, sp.range * a.scale, 0.5);
+    if (t) {
+      bolt(...bodyPt(a), ...bodyPt(t));
+      let n2 = null, nd = 8 * a.scale;
+      for (const e of ents.values()) { if (e === a || e === t || e.dead) continue; const dd = Math.hypot(e.x - t.x, e.z - t.z); if (dd < nd) { nd = dd; n2 = e; } }
+      if (n2) bolt(...bodyPt(t), ...bodyPt(n2));
+    } else bolt(...bodyPt(a), a.x + Math.sin(a.rot) * sp.range * 0.6, a.y + a.S.h * 0.5 * a.scale, a.z + Math.cos(a.rot) * sp.range * 0.6);
+  } else if (sp.type === 'area') {
     const R = sp.radius * a.scale;
     ring(a.x, a.y, a.z, R, S.glow); ring(a.x, a.y + 0.3, a.z, R * 0.7, '#ffffff');
-    if (a.sp === 'spino') for (let i = 0; i < 5; i++) { const an = i * 1.256 + Math.random(), r = R * 0.85; bolt(...bodyPt(a), a.x + Math.sin(an) * r, a.y + 0.5, a.z + Math.cos(an) * r); }
   }
 }
 
 function attack(a, special) {
   if (!a || a.dead || a.stunT > 0) return;
+  if (a.latch) { if (special && a.latch.kind === 'cling') { a.latch = null; a.spT = Math.max(a.spT, 1.5); } return; } // повторный «Спец» — спрыгнуть
   const S = a.S, reach = S.reach * a.scale;
   if (!special) {
     if (a.atkT > 0) return;
-    if (a === me) autoAim(a, reach);
-    a.atkT = S.cd * (a.over() ? 0.75 : 1); a.atkAnim = 1; a.atkFlagT = 0.3;
+    if (a === me) autoAim(a, reach, S.atk.type === 'tail');
+    a.atkT = S.cd * (a.over() ? 0.75 : 1); a.atkAnim = 1; a.atkFlagT = S.atk.type === 'saw' ? 0.8 : 0.3;
     primary(a, reach);
     return;
   }
   if (a.spT > 0) return;
-  const sp = S.special;
-  if (a === me && sp.type !== 'area') autoAim(a, reach * (sp.type === 'dash' ? 3 : 1));
+  const sp = S.special, range = (sp.range || S.reach) * a.scale;
+  if (a === me && sp.type !== 'area') autoAim(a, range);
   a.spT = sp.cd; a.atkAnim = 1; a.atkFlagT = 0.4; a.spFlagT = 0.4;
   const near = a === me || camera.position.distanceTo(a.m.root.position) < 45;
   if (near) sfx.roar(a.sp === 'raptor' ? 1.8 : 1, a === me ? 1 : 0.45);
-  if (sp.type === 'heavy') {
+  let miss = false;
+  if (sp.type === 'clamp') {
     const t = nearestInFront(a, reach * 1.15, 1.3);
-    if (t) dealDamage(a, t, a.dmg() * sp.mult, sp.fx);
+    if (t) {
+      dealDamage(a, t, a.dmg() * sp.mult, { s: sp.dur });
+      a.latch = { id: t.id, kind: 'clamp', t: sp.dur, tick: sp.tick, acc: sp.tick * 0.6, mult: sp.tickMult, dmg: 0 };
+    } else miss = true;
+  } else if (sp.type === 'bolt') {
+    const t = nearestInFront(a, range, 0.5);
+    if (t) {
+      dealDamage(a, t, a.dmg() * sp.mult, sp.fx);
+      let n2 = null, nd = 8 * a.scale;
+      for (const e of ents.values()) { if (e === a || e === t || e.dead) continue; const dd = Math.hypot(e.x - t.x, e.z - t.z); if (dd < nd) { nd = dd; n2 = e; } }
+      if (n2) dealDamage(a, n2, a.dmg() * sp.mult * 0.5, sp.fx);
+    } else miss = true;
   } else if (sp.type === 'area') {
     const R = sp.radius * a.scale;
-    for (const e of ents.values()) {
-      if (e === a || e.dead) continue;
-      if (Math.hypot(e.x - a.x, e.z - a.z) - e.radius() < R) dealDamage(a, e, a.dmg() * sp.mult, sp.fx);
-    }
+    for (const e of nearEnemies(a, R)) dealDamage(a, e, a.dmg() * sp.mult, sp.fx);
     if (sp.shield) a.shieldT = sp.shield; // Стего: режим бастиона
-  } else if (sp.type === 'dash') {
+  } else if (sp.type === 'dash' || sp.type === 'leap') {
     a.dashT = sp.dur; a.dashHit = new Set();
   }
+  if (miss) a.spT = Math.min(a.spT, 2);
   if (near) specialFx(a);
 }
 
@@ -340,6 +412,7 @@ function applyDamage(t, dmg, byId, byName, f) {
   if (t.shieldT > 0) dmg *= 0.5;
   dmg = Math.round(dmg);
   t.hp -= dmg; t.combatT = 6; t.flash();
+  if (t.latch && t.latch.kind === 'cling') { t.latch.dmg += dmg; if (t.latch.dmg > t.maxHp() * 0.18) { t.latch = null; t.spT = Math.max(t.spT, 2); if (t === me) toast('Сбросили с брони!'); } } // сбили наездника
   if (f.s && t.stunImm <= 0) { t.stunT = Math.max(t.stunT, f.s); t.stunImm = f.s + 2; t.dashT = 0; if (t === me) toast('⚡ Системы обесточены!'); }
   if (f.sl) t.slowT = Math.max(t.slowT, f.sl);
   if (f.kb && att) { const dx = t.x - att.x, dz = t.z - att.z, dd = Math.hypot(dx, dz) || 1; t.kvx += dx / dd * f.kb * 3; t.kvz += dz / dd * f.kb * 3; }
@@ -410,12 +483,12 @@ const handlers = {
       const af = flags & 2;
       const sf = flags & 16;
       if (af && !e.lastAtkFlag) {
-        e.atkAnim = 1;
-        if (e.sp === 'spino' && !sf) { const t = nearestInFront(e, e.S.reach * e.scale, 0.5); if (t) bolt(...bodyPt(e), ...bodyPt(t)); }
+        e.atkAnim = 1; e.dir = -e.dir;
+        if (e.S.atk.type === 'saw' && !sf) e.sawVis = e.S.atk.spin;
       }
       if (sf && !e.lastSpFlag) specialFx(e);
       e.lastAtkFlag = af; e.lastSpFlag = sf;
-      e.shieldT = (flags & 32) ? 0.5 : 0;
+      e.shieldT = (flags & 32) ? 0.5 : 0; e.clung = (flags & 64) !== 0;
     }
     for (const e of ents.values()) if (!e.local && e.peer === peerId && !seen.has(e.id)) { ents.delete(e.id); e.dispose(); }
   },
@@ -462,7 +535,7 @@ function sendState() {
   const e = [];
   for (const d of ents.values()) {
     if (!d.local || d.dead) continue;
-    const flags = (d.moving ? 1 : 0) | (d.atkFlagT > 0 ? 2 : 0) | (d.sprint ? 4 : 0) | (d.bot ? 8 : 0) | (d.spFlagT > 0 ? 16 : 0) | (d.shieldT > 0 ? 32 : 0);
+    const flags = (d.moving ? 1 : 0) | (d.atkFlagT > 0 ? 2 : 0) | (d.sprint ? 4 : 0) | (d.bot ? 8 : 0) | (d.spFlagT > 0 ? 16 : 0) | (d.shieldT > 0 ? 32 : 0) | (d.latch && d.latch.kind === 'cling' ? 64 : 0);
     e.push([d.id, SP_KEYS.indexOf(d.sp), d.name, r1(d.x), r1(d.z), r2(d.rot), r2(d.g), r2(Math.max(0, d.hp / d.maxHp())), flags, d.kills]);
   }
   net.state({ c: clientId, e });
@@ -504,6 +577,17 @@ function spawnBot() {
 // ================= Движение (общее для игрока и ботов) =================
 function moveMech(d, mx, mz, run, dt) {
   if (d.stunT > 0) { mx = 0; mz = 0; run = false; d.dashT = 0; }
+  if (d.latch) {
+    const L = d.latch, t = ents.get(L.id);
+    if (!t || t.dead || d.stunT > 0 || L.t <= 0) d.latch = null;
+    else if (L.kind === 'cling') { // Раптор сидит на спине врага
+      d.x = t.x - Math.sin(t.rot) * 0.4; d.z = t.z - Math.cos(t.rot) * 0.4; d.rot = t.rot; d.moving = false; d.sprint = false; return;
+    } else if (Math.hypot(t.x - d.x, t.z - d.z) > d.radius() + t.radius() + d.S.reach * d.scale * 1.6) d.latch = null;
+    else { // Рекс держит и не двигается
+      d.moving = false; d.sprint = false;
+      d.rot += Math.max(-d.S.turn * dt, Math.min(d.S.turn * dt, angDiff(d.rot, Math.atan2(t.x - d.x, t.z - d.z)))); return;
+    }
+  }
   const mag = Math.min(1, Math.hypot(mx, mz));
   d.moving = mag > 0.08 || d.dashT > 0;
   d.sprint = run && d.moving && d.st > 2;
@@ -515,16 +599,28 @@ function moveMech(d, mx, mz, run, dt) {
     if (Math.random() < 0.6) sparks(d.x - Math.sin(d.rot) * d.radius(), d.y + d.S.h * 0.4 * d.scale, d.z - Math.cos(d.rot) * d.radius(), d.scale * 0.8, 1, 0.3);
     for (const e of ents.values()) {
       if (e === d || e.dead || d.dashHit.has(e.id)) continue;
-      if (Math.hypot(e.x - d.x, e.z - d.z) < d.radius() + e.radius() + 0.8 * d.scale) { d.dashHit.add(e.id); dealDamage(d, e, d.dmg() * d.S.special.mult, d.S.special.fx); }
+      if (Math.hypot(e.x - d.x, e.z - d.z) < d.radius() + e.radius() + 0.8 * d.scale) {
+        const sp = d.S.special;
+        if (sp.type === 'leap') { // Раптор: вцепляется в первого, кого достал
+          dealDamage(d, e, d.dmg() * sp.mult, sp.fx);
+          d.latch = { id: e.id, kind: 'cling', t: sp.latch, tick: sp.tick, acc: 0.25, mult: sp.tickMult, fx: sp.fx, dmg: 0 };
+          d.dashT = 0; d.hopT = 0; break;
+        }
+        d.dashHit.add(e.id); dealDamage(d, e, d.dmg() * sp.mult, sp.fx);
+      }
     }
     if (d.dashT <= 0 && d.sp === 'raptor') d.atkT = 0; // после прыжка удар готов сразу
-  } else if (d.moving) {
-    const want = Math.atan2(mx, mz);
-    const turn = (d.sp === 'raptor' ? 12 : 7) * dt;
-    const df = angDiff(d.rot, want);
-    d.rot += Math.max(-turn, Math.min(turn, df));
-    const sp = d.speed(d.sprint) * mag * (Math.abs(df) > 1.6 ? 0.4 : 1);
-    d.x += Math.sin(d.rot) * sp * dt; d.z += Math.cos(d.rot) * sp * dt;
+  } else {
+    let tsp = 0;
+    if (d.moving) {
+      const want = Math.atan2(mx, mz), turn = d.S.turn * dt, df = angDiff(d.rot, want);
+      d.rot += Math.max(-turn, Math.min(turn, df));
+      tsp = d.speed(d.sprint) * mag * (Math.abs(df) > 1.6 ? 0.4 : 1) * (d.sawT > 0 ? 0.6 : 1);
+    }
+    d.vsp += (tsp - d.vsp) * Math.min(1, d.S.accel * dt); // тяжёлые разгоняются и тормозят медленнее
+    if (d.vsp < 0.05) d.vsp = 0;
+    if (d.vsp > 0) { d.x += Math.sin(d.rot) * d.vsp * dt; d.z += Math.cos(d.rot) * d.vsp * dt; }
+    if (d.vsp > 0.8) d.moving = true;
   }
   if (d.kvx || d.kvz) { // отбрасывание
     d.x += d.kvx * dt; d.z += d.kvz * dt;
@@ -550,6 +646,7 @@ function levelUp(d) {
 function tickCommon(d, dt) {
   d.atkT -= dt; d.spT -= dt; d.atkFlagT -= dt; d.combatT -= dt; d.spFlagT -= dt;
   d.stunT -= dt; d.slowT -= dt; d.shieldT -= dt; d.stunImm -= dt;
+  tickAttacks(d, dt);
   if (d.sp === 'spino' && inWater(d.x, d.z)) d.hp = Math.min(d.maxHp(), d.hp + d.maxHp() * 0.04 * dt); // водяное охлаждение
   if (mode === 'grow' && d.g < 1) {
     const before = stageIndex(d.g);
@@ -575,11 +672,12 @@ function tickCommon(d, dt) {
 }
 
 // ================= ИИ ботов: у каждого меха свой характер =================
-const AI_RANGE = { brawler: 32, skirmisher: 30, sniper: 30, rammer: 12, bastion: 16 };
-const AI_FLEE = { brawler: 0.12, skirmisher: 0.35, sniper: 0.25, rammer: 0.2, bastion: 0.15 };
+const AI_RANGE = { brawler: 32, skirmisher: 30, circler: 30, rammer: 12, bastion: 16 };
+const AI_FLEE = { brawler: 0.12, skirmisher: 0.35, circler: 0.25, rammer: 0.2, bastion: 0.15 };
 function botAI(b, dt) {
   const ai = b.S.ai;
   if (!b.home) b.home = { x: b.x, z: b.z };
+  if (b.wasLatch && !b.latch && ai === 'skirmisher') { b.phase = 'retreat'; b.phaseT = 1.0; b.orbit = Math.random() < 0.5 ? 1 : -1; } // спрыгнул — отскок
   b.think -= dt;
   if (b.think <= 0) {
     b.think = 0.35 + Math.random() * 0.3;
@@ -616,40 +714,42 @@ function botAI(b, dt) {
     const dx = t.x - b.x, dz = t.z - b.z, d = Math.hypot(dx, dz) || 1, ang = Math.atan2(dx, dz);
     const reach = b.S.reach * b.scale + t.radius();
     const off = Math.abs(angDiff(b.rot, ang));
-    const face = () => { b.rot += Math.max(-7 * dt, Math.min(7 * dt, angDiff(b.rot, ang))); };
+    const lim = b.S.turn * dt;
+    const face = () => { b.rot += Math.max(-lim, Math.min(lim, angDiff(b.rot, ang))); };
     const fwd = (k = 1) => { mx = dx / d * k; mz = dz / d * k; };
     const back = () => { mx = -dx / d; mz = -dz / d; };
     const side = k => { mx = -dz / d * b.orbit * k; mz = dx / d * b.orbit * k; };
     if (b.flee) { back(); run = b.st > 20; }
     else if (ai === 'brawler') { // Рекс: давит напролом
       if (d > reach * 0.85) { fwd(); run = d > 12 && b.st > 30; }
-      else { face(); if (off < 0.6) { if (b.spT <= 0 && Math.random() < 0.06) attack(b, true); else attack(b, false); } }
+      else { face(); if (off < 0.5) { if (b.spT <= 0 && Math.random() < 0.08) attack(b, true); else attack(b, false); } }
     } else if (ai === 'skirmisher') { // Раптор: 3 удара — отскок по кругу, прыжок для сближения
       if (b.phase === 'retreat') {
         b.phaseT -= dt; back(); const bx = mx, bz = mz; side(1); mx = mx * 0.8 + bx * 0.6; mz = mz * 0.8 + bz * 0.6; run = b.st > 15;
         if (b.phaseT <= 0) { b.phase = 'strike'; b.hits = 0; }
       } else if (d > reach * 0.85) {
         fwd(); run = b.st > 20;
-        if (b.spT <= 0 && d < 16 && d > 5 && off < 0.2) attack(b, true);
+        if (b.spT <= 0 && d < 12 && d > 4.5 && off < 0.2) attack(b, true); // прыжок-захват
       } else {
         face();
         if (off < 0.6 && b.atkT <= 0) { attack(b, false); if (++b.hits >= 3) { b.phase = 'retreat'; b.phaseT = 1.0 + Math.random() * 0.6; b.orbit = Math.random() < 0.5 ? 1 : -1; } }
       }
-    } else if (ai === 'sniper') { // Спино: держит дистанцию и кружит
+    } else if (ai === 'circler') { // Спино: кружит вокруг врага и пилит хвостом, издали бьёт молнией
       b.orbitT -= dt; if (b.orbitT <= 0) { b.orbit = -b.orbit; b.orbitT = 2.5 + Math.random() * 1.5; }
-      const want = b.S.reach * b.scale * 0.75;
-      if (d < want * 0.5) { back(); run = b.st > 25; if (b.spT <= 0) attack(b, true); } // вплотную — ЭМИ
-      else if (d > want * 1.25) fwd();
-      else side(0.7);
-      if (d < want * 1.3) { face(); if (off < 0.5) attack(b, false); }
+      const R = b.S.reach * b.scale * 0.9;
+      if (d > R * 1.1) { fwd(); run = d > 14 && b.st > 30; if (b.spT <= 0 && d > 6 && d < b.S.special.range * 0.9 * b.scale) { face(); if (off < 0.35) attack(b, true); } }
+      else { if (d < R * 0.5) { const bx = -dx / d, bz = -dz / d; side(0.8); mx = mx + bx * 0.4; mz = mz + bz * 0.4; } else side(0.9); attack(b, false); }
     } else if (ai === 'rammer') { // Трицера: разгоняется и таранит
       if (d > reach * 0.85) { fwd(); run = d > 10 && b.st > 30; if (b.spT <= 0 && d > 6 && d < 20 && off < 0.25) attack(b, true); }
       else { face(); if (off < 0.6) attack(b, false); }
-    } else { // bastion — Стего: стоит на месте и ждёт
+    } else { // bastion — Стего: стоит на месте, разворачивается к врагу задом и бьёт хвостом
       const hd = Math.hypot(b.home.x - b.x, b.home.z - b.z);
+      const hitD = b.S.reach * b.scale + t.radius();
       if (hd > 20) { mx = (b.home.x - b.x) / hd; mz = (b.home.z - b.z) / hd; }
-      else if (d > reach * 0.85) { if (d < reach * 1.8) fwd(0.7); else face(); }
-      else { face(); if (off < 0.8) attack(b, false); }
+      else if (d < hitD * 1.5) { // враг близко: поворачиваемся хвостом
+        const want = ang + Math.PI; b.rot += Math.max(-lim, Math.min(lim, angDiff(b.rot, want)));
+        if (Math.abs(angDiff(b.rot + Math.PI, ang)) < 0.8 && d < hitD) attack(b, false);
+      } else if (d < 14) face();
       const R = b.S.special.radius * b.scale * 0.9;
       if (b.spT <= 0 && d < R && (b.hp < b.maxHp() * 0.7 || Math.random() < 0.03)) attack(b, true);
     }
@@ -877,15 +977,15 @@ let chosenMode = localStorage.getItem('mech_mode') || 'grow';
 if (!SPECIES[chosen]) chosen = 'rex';
 $('nick').value = localStorage.getItem('mech_nick') || '';
 function renderCards() {
-  const max = { hp: 1300, dmg: 150, run: 15 };
+  const max = { hp: 1600, dmg: 160, run: 17 };
   $('cards').innerHTML = SP_KEYS.map(k => {
     const S = SPECIES[k];
     const bar = (v, m) => `<i><b style="width:${Math.round(v / m * 100)}%;background:${S.glow}"></b></i>`;
     return `<button class="card ${k === chosen ? 'sel' : ''}" data-k="${k}" style="--g:${S.glow}">
       <div class="cn">${S.name}</div>
       <div class="cd">${S.diet === 'carn' ? '🔩 Металлолом' : '💎 Кристаллы'}</div>
-      <div class="st"><em>HP</em>${bar(S.hp, max.hp)}</div>
-      <div class="st"><em>УРН</em>${bar(S.dmg, max.dmg)}</div>
+      <div class="st"><em>ЗАЩ</em>${bar(S.rate.def, max.hp)}</div>
+      <div class="st"><em>УРН</em>${bar(S.rate.dps, max.dmg)}</div>
       <div class="st"><em>СКР</em>${bar(S.run, max.run)}</div>
     </button>`;
   }).join('');
