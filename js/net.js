@@ -1,6 +1,6 @@
-// Онлайн без своего сервера: игроки соединяются напрямую (WebRTC, библиотека Trystero).
+// Онлайн без своего сервера (ЭРА ЯЩЕРОВ): игроки соединяются напрямую (WebRTC, библиотека Trystero).
 // Знакомство идёт через бесплатные публичные реле Nostr, сами данные игры летят напрямую между игроками.
-const APP_ID = 'sukrievmusa-dino-arena-v1';
+const APP_ID = 'sukrievmusa-era-yasherov-v1';
 const LIBS = ['https://esm.run/trystero@0.27.0', 'https://esm.sh/trystero@0.27.0'];
 
 export async function connect(roomName, h) {
@@ -10,11 +10,12 @@ export async function connect(roomName, h) {
   }
   if (!lib || !lib.joinRoom) return null;
 
-  const room = lib.joinRoom({ appId: APP_ID, identity: 'none' }, 'dino-' + roomName);
-  const st = room.makeAction('st'), hit = room.makeAction('hit'), kill = room.makeAction('kill');
+  const room = lib.joinRoom({ appId: APP_ID, identity: 'none' }, 'era-' + roomName);
+  const st = room.makeAction('st'), hit = room.makeAction('hit'), kill = room.makeAction('kill'), call = room.makeAction('call');
   st.onMessage((d, ctx) => h.onState(d, ctx.peerId));
   hit.onMessage((d, ctx) => h.onHit(d, ctx.peerId));
   kill.onMessage((d, ctx) => h.onKill(d, ctx.peerId));
+  call.onMessage((d, ctx) => h.onCall && h.onCall(d, ctx.peerId));
   room.onPeerLeave(({ peerId }) => h.onLeave && h.onLeave(peerId));
   if (room.onPeerJoin) room.onPeerJoin(({ peerId }) => h.onJoin && h.onJoin(peerId));
   // игрок нашёлся через сервер знакомств, но сеть не пустила прямое соединение
@@ -26,6 +27,7 @@ export async function connect(roomName, h) {
     state: d => safe(() => st.send(d)),
     hit: (peer, d) => safe(() => hit.send(d, { target: peer })),
     kill: d => safe(() => kill.send(d)),
+    call: d => safe(() => call.send(d)),
     leave: () => safe(() => room.leave()),
     // сколько серверов знакомств (Nostr-реле) сейчас на связи
     relays: () => {

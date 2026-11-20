@@ -1,23 +1,28 @@
-// Звуки без файлов: генерируются Web Audio прямо в браузере.
-let ctx = null, noise = null, master = null;
+// Звуки без файлов: рёв, зов, укусы, шаги, вода и звуки леса синтезируются прямо в браузере.
+let ctx = null, noise = null, master = null, amb = null;
 export function initAudio() {
   if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
   try {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
-    master = ctx.createGain(); master.gain.value = 0.5; master.connect(ctx.destination);
-    noise = ctx.createBuffer(1, ctx.sampleRate * 0.5, ctx.sampleRate);
+    master = ctx.createGain(); master.gain.value = 0.55; master.connect(ctx.destination);
+    noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    // ветер: тихий шум, всегда играет
+    const s = ctx.createBufferSource(); s.buffer = noise; s.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 420;
+    amb = ctx.createGain(); amb.gain.value = 0.05;
+    s.connect(f).connect(amb).connect(master); s.start();
   } catch (e) { ctx = null; }
 }
-// не даём одному звуку срабатывать чаще, чем раз в ms (телефонам тяжело с сотней звуков)
 const lastT = {};
 const ok = (k, ms) => { const n = performance.now(); if (n - (lastT[k] || 0) < ms) return false; lastT[k] = n; return true; };
+function env(g, t, a, peak, dur) { peak = Math.max(peak, 0.0002); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + dur); }
 function nz(t, dur, type, f0, f1, q, peak, a = 0.004) {
   const s = ctx.createBufferSource(); s.buffer = noise;
   const f = ctx.createBiquadFilter(); f.type = type; f.Q.value = q;
   f.frequency.setValueAtTime(f0, t); if (f1 !== f0) f.frequency.exponentialRampToValueAtTime(f1, t + dur);
   const g = ctx.createGain(); env(g, t, a, peak, dur);
-  s.connect(f).connect(g).connect(master); s.start(t); s.stop(t + dur + 0.02);
+  s.connect(f).connect(g).connect(master); s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.02);
 }
 function tone(t, dur, type, f0, f1, peak, a = 0.004) {
   const o = ctx.createOscillator(); o.type = type;
@@ -25,143 +30,52 @@ function tone(t, dur, type, f0, f1, peak, a = 0.004) {
   const g = ctx.createGain(); env(g, t, a, peak, dur);
   o.connect(g).connect(master); o.start(t); o.stop(t + dur + 0.02);
 }
-function env(g, t, a, peak, dur) {
-  peak = Math.max(peak, 0.0002); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + dur); }
+// голос животного: пила с вибрато через два фильтра-форманты + рычащий шум
+function voice(t, dur, f0, f1, vol, rough = 0.5, a = 0.08) {
+  const o = ctx.createOscillator(); o.type = 'sawtooth';
+  o.frequency.setValueAtTime(f0, t); o.frequency.linearRampToValueAtTime(f0 * 1.15, t + dur * 0.3); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  const lfo = ctx.createOscillator(); lfo.frequency.value = 18 + Math.random() * 10;
+  const lg = ctx.createGain(); lg.gain.value = f0 * 0.06 * (0.5 + rough); lfo.connect(lg).connect(o.frequency);
+  const f1f = ctx.createBiquadFilter(); f1f.type = 'bandpass'; f1f.frequency.value = f0 * 3.2; f1f.Q.value = 2.5;
+  const f2f = ctx.createBiquadFilter(); f2f.type = 'lowpass'; f2f.frequency.value = f0 * 9;
+  const g = ctx.createGain(); env(g, t, a, vol, dur);
+  o.connect(f2f).connect(g); o.connect(f1f).connect(g); g.connect(master);
+  o.start(t); lfo.start(t); o.stop(t + dur + 0.05); lfo.stop(t + dur + 0.05);
+  if (rough > 0) nz(t, dur * 0.9, 'bandpass', f0 * 4, f0 * 2, 1.5, vol * rough * 0.5, a);
+}
 
 export const sfx = {
-  // тяжёлый металлический шаг: глухой удар + звон + шипение гидравлики (w — вес робота)
-  step(w = 1, vol = 1) {
-    if (!ctx || vol < 0.03 || !ok('step', w > 0.6 ? 55 : 90)) return; const t = ctx.currentTime;
-    tone(t, 0.16 + w * 0.12, 'sine', 120 - w * 55, 38, 0.55 * vol * (0.4 + w * 0.6));
-    nz(t, 0.05, 'bandpass', 2200 - w * 900, 2200 - w * 900, 4, 0.12 * vol);
-    if (w > 0.6) nz(t + 0.03, 0.12, 'highpass', 5000, 5000, 0.7, 0.035 * vol * w, 0.02);
+  // шаг: глухой удар, тем ниже и громче, чем тяжелее животное (w: 0..1)
+  step(w, vol) {
+    if (!ctx || vol < 0.04 || !ok('step', 70)) return; const t = ctx.currentTime;
+    if (w > 0.25) tone(t, 0.12 + w * 0.25, 'sine', 90 - w * 50, 30, 0.6 * vol * w);
+    nz(t, 0.06 + w * 0.08, 'lowpass', 900 - w * 500, 300, 0.8, 0.25 * vol * (0.3 + w));
   },
-  // свист замаха
-  whoosh(p = 1, vol = 1) {
-    if (!ctx || vol < 0.03 || !ok('whoosh', 40)) return; const t = ctx.currentTime;
-    nz(t, 0.22, 'bandpass', 350 * p, 2200 * p, 1.6, 0.35 * vol, 0.05);
-  },
-  // сервопривод: короткое «вжжж» робота при замахе
-  servo(p = 1, vol = 1) {
-    if (!ctx || vol < 0.03 || !ok('servo', 60)) return; const t = ctx.currentTime;
-    const o = ctx.createOscillator(); o.type = 'square'; o.frequency.setValueAtTime(180 * p, t); o.frequency.exponentialRampToValueAtTime(420 * p, t + 0.12);
-    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1400;
-    const g = ctx.createGain(); env(g, t, 0.01, 0.06 * vol, 0.14);
-    o.connect(f).connect(g).connect(master); o.start(t); o.stop(t + 0.16);
-  },
-  // хруст челюстей
-  crunch(vol = 1) {
-    if (!ctx || !ok('crunch', 50)) return; const t = ctx.currentTime;
-    nz(t, 0.12, 'lowpass', 1800, 500, 1, 0.8 * vol);
-    tone(t, 0.06, 'square', 260, 120, 0.15 * vol);
-    nz(t + 0.05, 0.08, 'bandpass', 3000, 3000, 3, 0.3 * vol);
-  },
-  // рубящий клинок
-  slash(vol = 1) {
-    if (!ctx || !ok('slash', 40)) return; const t = ctx.currentTime;
-    nz(t, 0.08, 'highpass', 3500, 3500, 0.8, 0.45 * vol);
-    tone(t, 0.25, 'triangle', 2400, 1900, 0.09 * vol);
-  },
-  // тяжёлый удар (хвост-молот, таран, топот)
-  thud(vol = 1) {
-    if (!ctx || !ok('thud', 50)) return; const t = ctx.currentTime;
-    tone(t, 0.35, 'sine', 95, 32, 0.9 * vol);
-    nz(t, 0.25, 'lowpass', 900, 120, 1, 0.7 * vol);
-    nz(t, 0.1, 'bandpass', 1600, 1600, 3, 0.25 * vol);
-  },
-  // хлыст хвоста
-  whip(vol = 1) {
-    if (!ctx || !ok('whip', 40)) return; const t = ctx.currentTime;
-    nz(t, 0.05, 'highpass', 2500, 2500, 0.7, 0.5 * vol);
-    tone(t, 0.18, 'sine', 140, 60, 0.4 * vol);
-  },
-  // визг пилы
-  saw(vol = 1) {
-    if (!ctx || !ok('saw', 90)) return; const t = ctx.currentTime;
-    tone(t, 0.2, 'sawtooth', 620, 540, 0.08 * vol);
-    nz(t, 0.18, 'bandpass', 4200, 3600, 5, 0.35 * vol);
-  },
-  // электрический разряд
-  zap(vol = 1) {
-    if (!ctx || !ok('zap', 50)) return; const t = ctx.currentTime;
-    const o = ctx.createOscillator(); o.type = 'square';
-    for (let i = 0; i < 6; i++) o.frequency.setValueAtTime(200 + Math.random() * 1600, t + i * 0.03);
-    const g = ctx.createGain(); env(g, t, 0.003, 0.16 * vol, 0.2);
-    o.connect(g).connect(master); o.start(t); o.stop(t + 0.22);
-    nz(t, 0.2, 'highpass', 3000, 3000, 0.7, 0.3 * vol);
-  },
-  // выстрел шипом / запуск ракеты
-  shoot(vol = 1) {
-    if (!ctx || !ok('shoot', 45)) return; const t = ctx.currentTime;
-    nz(t, 0.12, 'bandpass', 900, 2600, 2, 0.4 * vol);
-    tone(t, 0.08, 'square', 300, 160, 0.06 * vol);
-  },
-  rocket(vol = 1) {
-    if (!ctx || !ok('rocket', 50)) return; const t = ctx.currentTime;
-    nz(t, 0.45, 'bandpass', 300, 3000, 1.2, 0.35 * vol, 0.03);
-  },
-  // шипение пара
-  steam(vol = 1) {
-    if (!ctx || !ok('steam', 120)) return; const t = ctx.currentTime;
-    nz(t, 0.6, 'highpass', 4000, 6000, 0.6, 0.18 * vol, 0.05);
-  },
-  // металлический лязг удара
-  clank(vol = 1) {
-    if (!ctx) return; const t = ctx.currentTime;
-    const s = ctx.createBufferSource(); s.buffer = noise;
-    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2400; f.Q.value = 3;
-    const g = ctx.createGain(); env(g, t, 0.003, 0.9 * vol, 0.15);
-    s.connect(f).connect(g).connect(master); s.start(t); s.stop(t + 0.16);
-    [523, 1390].forEach(fr => {
-      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = fr * (0.9 + Math.random() * 0.2);
-      const og = ctx.createGain(); env(og, t, 0.002, 0.12 * vol, 0.35);
-      o.connect(og).connect(master); o.start(t); o.stop(t + 0.36);
-    });
-  },
-  // взрыв при уничтожении меха
-  boom() {
-    if (!ctx) return; const t = ctx.currentTime;
-    const s = ctx.createBufferSource(); s.buffer = noise;
-    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(1200, t); f.frequency.exponentialRampToValueAtTime(80, t + 0.6);
-    const g = ctx.createGain(); env(g, t, 0.01, 1.0, 0.7);
-    s.connect(f).connect(g).connect(master); s.start(t); s.stop(t + 0.5);
-  },
+  splash(vol = 1) { if (!ctx || vol < 0.04 || !ok('splash', 120)) return; const t = ctx.currentTime; nz(t, 0.25, 'bandpass', 1400, 600, 1.2, 0.25 * vol, 0.01); },
   bite(vol = 1) {
-    if (!ctx) return; const t = ctx.currentTime;
-    const s = ctx.createBufferSource(); s.buffer = noise;
-    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 900;
-    const g = ctx.createGain(); env(g, t, 0.005, 0.8 * vol, 0.18);
-    s.connect(f).connect(g).connect(master); s.start(t); s.stop(t + 0.2);
+    if (!ctx || !ok('bite', 60)) return; const t = ctx.currentTime;
+    nz(t, 0.09, 'lowpass', 2400, 600, 1, 0.9 * vol);
+    tone(t, 0.07, 'square', 180, 70, 0.18 * vol);
+    nz(t + 0.04, 0.1, 'bandpass', 3200, 1600, 3, 0.35 * vol);
   },
-  roar(pitch = 1, vol = 1) {
-    if (!ctx) return; const t = ctx.currentTime;
-    const o = ctx.createOscillator(); o.type = 'sawtooth';
-    o.frequency.setValueAtTime(90 * pitch, t); o.frequency.exponentialRampToValueAtTime(220 * pitch, t + 0.25); o.frequency.exponentialRampToValueAtTime(60 * pitch, t + 0.8);
-    const lfo = ctx.createOscillator(); lfo.frequency.value = 28; const lg = ctx.createGain(); lg.gain.value = 25 * pitch;
-    lfo.connect(lg).connect(o.frequency);
-    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 900;
-    const g = ctx.createGain(); env(g, t, 0.04, 0.45 * vol, 0.9);
-    o.connect(f).connect(g).connect(master); o.start(t); o.stop(t + 0.95); lfo.start(t); lfo.stop(t + 0.95);
+  whoosh(vol = 1) { if (!ctx || !ok('whoosh', 60)) return; nz(ctx.currentTime, 0.25, 'bandpass', 300, 1600, 1.4, 0.3 * vol, 0.06); },
+  thud(vol = 1) { if (!ctx || !ok('thud', 60)) return; const t = ctx.currentTime; tone(t, 0.3, 'sine', 120, 35, 0.9 * vol); nz(t, 0.2, 'lowpass', 600, 120, 1, 0.5 * vol); },
+  // p — высота голоса (меньше животное — выше), vol — громкость по расстоянию
+  roar(p = 1, vol = 1) { if (!ctx || vol < 0.03 || !ok('roar', 300)) return; voice(ctx.currentTime, 1.3, 75 * p, 48 * p, 0.55 * vol, 0.9, 0.12); },
+  call(p = 1, vol = 1) {
+    if (!ctx || vol < 0.03 || !ok('call', 250)) return; const t = ctx.currentTime;
+    voice(t, 0.55, 140 * p, 120 * p, 0.38 * vol, 0.25, 0.05);
+    voice(t + 0.6, 0.8, 160 * p, 95 * p, 0.42 * vol, 0.3, 0.05);
   },
-  hurt() {
-    if (!ctx) return; const t = ctx.currentTime;
-    const o = ctx.createOscillator(); o.type = 'sine';
-    o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(50, t + 0.25);
-    const g = ctx.createGain(); env(g, t, 0.005, 0.9, 0.3);
-    o.connect(g).connect(master); o.start(t); o.stop(t + 0.32);
-  },
-  eat() {
-    if (!ctx) return; const t = ctx.currentTime;
-    const o = ctx.createOscillator(); o.type = 'square'; o.frequency.setValueAtTime(520, t); o.frequency.exponentialRampToValueAtTime(900, t + 0.08);
-    const g = ctx.createGain(); env(g, t, 0.005, 0.15, 0.12);
-    o.connect(g).connect(master); o.start(t); o.stop(t + 0.13);
-  },
-  levelUp() {
-    if (!ctx) return; const t = ctx.currentTime;
-    [523, 659, 784, 1046].forEach((fr, i) => {
-      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = fr;
-      const g = ctx.createGain(); env(g, t + i * 0.08, 0.01, 0.25, 0.25);
-      o.connect(g).connect(master); o.start(t + i * 0.08); o.stop(t + i * 0.08 + 0.3);
-    });
+  hurt(p = 1, vol = 1) { if (!ctx || vol < 0.04 || !ok('hurt', 200)) return; voice(ctx.currentTime, 0.4, 200 * p, 110 * p, 0.35 * vol, 0.6, 0.02); },
+  chew(vol = 1) { if (!ctx || !ok('chew', 260)) return; const t = ctx.currentTime; nz(t, 0.08, 'lowpass', 1500, 500, 1, 0.3 * vol); nz(t + 0.12, 0.07, 'lowpass', 1300, 400, 1, 0.22 * vol); },
+  slurp(vol = 1) { if (!ctx || !ok('slurp', 300)) return; const t = ctx.currentTime; nz(t, 0.18, 'bandpass', 700, 1500, 4, 0.25 * vol, 0.03); tone(t + 0.05, 0.1, 'sine', 500, 900, 0.05 * vol); },
+  sniff(vol = 1) { if (!ctx || !ok('sniff', 300)) return; const t = ctx.currentTime; for (let i = 0; i < 3; i++) nz(t + i * 0.13, 0.1, 'highpass', 2500, 4000, 1, 0.18 * vol, 0.03); },
+  grow() { if (!ctx) return; const t = ctx.currentTime; [523, 659, 784, 1046].forEach((f, i) => tone(t + i * 0.1, 0.35, 'triangle', f, f, 0.16)); },
+  // звуки леса: птицы днём, сверчки ночью
+  ambient(night) {
+    if (!ctx || !ok('amb', 1500) || Math.random() < 0.45) return; const t = ctx.currentTime;
+    if (night) { for (let i = 0; i < 6; i++) tone(t + i * 0.07, 0.04, 'sine', 4200 + Math.random() * 300, 4300, 0.025); }
+    else { const f = 1800 + Math.random() * 1600, n = 2 + Math.floor(Math.random() * 3); for (let i = 0; i < n; i++) tone(t + i * 0.16, 0.12, 'sine', f, f * (1.2 + Math.random() * 0.4), 0.03); }
   },
 };

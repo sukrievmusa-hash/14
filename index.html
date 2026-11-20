@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#14181d">
+<meta name="theme-color" content="#1a1712">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>МЕХАЗАВРЫ — онлайн 3D-битва робо-динозавров</title>
-<meta name="description" content="Онлайн 3D-игра в браузере: управляй боевым робо-динозавром, прокачивайся до ПРАЙМА и сражайся с другими игроками.">
+<title>ЭРА ЯЩЕРОВ — выживание динозавров</title>
+<meta name="description" content="3D-игра про выживание динозавров в браузере: вылупись детёнышем, найди еду и воду, вырасти и выживи. Онлайн, на телефоне и компьютере.">
 <link rel="manifest" href="manifest.json">
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
@@ -22,83 +22,81 @@
 <canvas id="c"></canvas>
 <div id="touch"></div>
 <div id="vignette"></div>
-<div id="nums"></div>
+<div id="smell-fx"></div>
+<div id="marks"></div>
 
-<div id="loading"><div class="logo">МЕХА<span>ЗАВРЫ</span></div><div class="spin"></div><p>Сборка мехов…</p></div>
+<div id="loading"><div class="logo">ЭРА <span>ЯЩЕРОВ</span></div><div class="spin"></div><p>Загрузка мира…</p></div>
 
 <!-- Игровой интерфейс -->
 <div id="hud" class="hidden">
-  <div id="bars">
+  <div id="vitals">
     <div id="stage">—</div>
-    <div class="bar hp"><div id="hp-fill"></div><span id="hp-txt"></span></div>
-    <div class="bar st"><div id="st-fill"></div></div>
-    <div class="bar gr"><div id="gr-fill"></div></div>
-    <div id="food-hint"></div>
+    <div class="vb" id="v-hp"><i>❤️</i><div class="bar"><div id="hp-f" class="f hp"></div></div></div>
+    <div class="vb" id="v-st"><i>⚡</i><div class="bar"><div id="st-f" class="f st"></div></div></div>
+    <div class="vb" id="v-fd"><i>🍖</i><div class="bar"><div id="fd-f" class="f fd"></div></div></div>
+    <div class="vb" id="v-wt"><i>💧</i><div class="bar"><div id="wt-f" class="f wt"></div></div></div>
+    <div class="vb gr"><i>🥚</i><div class="bar"><div id="gr-f" class="f gr"></div><span id="gr-txt"></span></div></div>
+    <div id="gr-hint"></div>
+    <div id="status"></div>
   </div>
-  <div id="right">
-    <div id="online">…</div>
-    <div id="room-hud" class="hidden"><div id="room-info"></div><button id="room-invite">📤 Позвать</button></div>
-    <div class="rrow">
-      <div id="lb"></div>
-      <canvas id="minimap"></canvas>
-    </div>
-    <div id="fps"></div>
+  <canvas id="compass"></canvas>
+  <div id="topright">
+    <span id="tod">☀️</span><span id="online">…</span>
+    <button id="b-map" title="Карта (M)">🗺</button>
+    <button id="b-full" title="Полный экран">⛶</button>
+    <button id="b-menu" title="В меню">☰</button>
   </div>
-  <button id="b-full" title="Полный экран">⛶</button>
-  <div id="feed"></div>
+  <div id="fps"></div>
   <div id="toast"></div>
   <div id="joy"><div id="knob"></div></div>
   <div id="joy-hint">👆 Води пальцем здесь,<br>чтобы идти</div>
   <div id="btns">
-    <button id="b-run" class="btn small">💨<small>Бег</small></button>
-    <button id="b-sp" class="btn mid"><span>⚡</span><small id="sp-name">Спец</small></button>
-    <button id="b-atk" class="btn big"><span>⚔️</span><small id="atk-name">Удар</small></button>
-    <button id="b-ult" class="btn ult"><span>🌀</span><small id="ult-name">Ульта</small></button>
+    <button id="b-feed" class="btn mid feed hidden"><span>🍖</span><small>Есть</small></button>
+    <button id="b-smell" class="btn small"><span>👃</span><small>Нюх</small></button>
+    <button id="b-call" class="btn small"><span>📣</span><small>Зов</small></button>
+    <button id="b-rest" class="btn small"><span>💤</span><small>Лечь</small></button>
+    <button id="b-run" class="btn small"><span>💨</span><small>Бег</small></button>
+    <button id="b-sp" class="btn mid"><span>⚡</span><small id="sp-name">Спец</small><em id="sp-cd"></em></button>
+    <button id="b-atk" class="btn big"><span>🦷</span><small id="atk-name">Укус</small></button>
   </div>
-  <div id="keys-hint">WASD — ходить · Shift — бег · Пробел/клик — удар (враг сзади — хвостом) · E — спец · Q — ульта · мышь — камера</div>
+  <div id="keys-hint">WASD — идти · Shift — бег · Пробел/клик — атака · E — спецприём · F — есть/пить · R — нюх · Q — зов · C — лечь · M — карта · колесо — приблизить</div>
 </div>
+
+<!-- Карта -->
+<div id="map" class="hidden"><canvas id="map-c"></canvas><p>Нажми, чтобы закрыть</p></div>
 
 <!-- Меню -->
 <div id="menu">
   <div class="panel">
     <div class="head">
-      <h1>МЕХА<span>ЗАВРЫ</span></h1>
-      <p class="sub">Онлайн-битва робо-динозавров</p>
+      <h1>ЭРА <span>ЯЩЕРОВ</span></h1>
+      <p class="sub">Вылупись. Найди еду и воду. Вырасти. Выживи.</p>
     </div>
-    <input id="nick" maxlength="14" placeholder="Позывной пилота" autocomplete="off" enterkeyhint="done">
+    <button id="continue" class="hidden"></button>
     <div id="cards"></div>
-    <p id="desc"></p>
-    <div class="modes">
-      <button class="mode" data-m="grow">🔧 <b>Апгрейд</b><small>С прототипа до ПРАЙМА</small></button>
-      <button class="mode" data-m="prime">⚔️ <b>Прайм-арена</b><small>Все на максимуме</small></button>
-      <button class="mode" data-m="room">👥 <b>Комната</b><small>Только живые игроки</small></button>
+    <div id="desc"></div>
+    <div class="row">
+      <input id="nick" maxlength="14" placeholder="Твоё имя" autocomplete="off" enterkeyhint="done">
+      <div class="seg"><button id="m-online">🌐 Онлайн</button><button id="m-solo">🏝 Один</button></div>
     </div>
-    <div id="room-box" class="hidden">
-      <span>Код комнаты</span>
-      <input id="room-code" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false">
-      <button id="room-new" title="Новый код">🎲</button>
-      <button id="room-share">📤 Позвать друзей</button>
-    </div>
-    <button id="play">В БОЙ</button>
-    <p class="tiny" id="menu-note">Без регистрации. Если никого нет онлайн, будут боты.</p>
+    <button id="play">🥚 ВЫЛУПИТЬСЯ</button>
+    <p class="tiny">Без регистрации. Прогресс сохраняется на этом устройстве. <a href="mech/">⚙️ Старая игра: МЕХАЗАВРЫ</a></p>
   </div>
 </div>
 
-<!-- Уничтожен -->
+<!-- Смерть -->
 <div id="death" class="hidden">
   <div class="panel small">
-    <h2>💥 Мех уничтожен</h2>
+    <h2>☠️ Ты погиб</h2>
     <p id="death-by"></p>
     <div id="death-stats"></div>
-    <button id="again">Снова в бой</button>
-    <button id="to-menu" class="ghost">Сменить меха</button>
+    <button id="again">🥚 Новая жизнь</button>
+    <button id="to-menu" class="ghost">Выбрать другого динозавра</button>
   </div>
 </div>
 
-<!-- Подсказка повернуть телефон -->
 <div id="rotate"><div class="phone">📱</div><p>Поверни телефон горизонтально</p></div>
-
 <noscript>Для игры нужен JavaScript.</noscript>
-<script type="module" src="js/main.js"></script>
+<script type="module" src="js/game.js"></script>
 </body>
 </html>

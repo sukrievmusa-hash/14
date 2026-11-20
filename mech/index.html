@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#14181d">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>МЕХАЗАВРЫ — онлайн 3D-битва робо-динозавров</title>
+<meta name="description" content="Онлайн 3D-игра в браузере: управляй боевым робо-динозавром, прокачивайся до ПРАЙМА и сражайся с другими игроками.">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="touch"></div>
+<div id="vignette"></div>
+<div id="nums"></div>
+
+<div id="loading"><div class="logo">МЕХА<span>ЗАВРЫ</span></div><div class="spin"></div><p>Сборка мехов…</p></div>
+
+<!-- Игровой интерфейс -->
+<div id="hud" class="hidden">
+  <div id="bars">
+    <div id="stage">—</div>
+    <div class="bar hp"><div id="hp-fill"></div><span id="hp-txt"></span></div>
+    <div class="bar st"><div id="st-fill"></div></div>
+    <div class="bar gr"><div id="gr-fill"></div></div>
+    <div id="food-hint"></div>
+  </div>
+  <div id="right">
+    <div id="online">…</div>
+    <div id="room-hud" class="hidden"><div id="room-info"></div><button id="room-invite">📤 Позвать</button></div>
+    <div class="rrow">
+      <div id="lb"></div>
+      <canvas id="minimap"></canvas>
+    </div>
+    <div id="fps"></div>
+  </div>
+  <button id="b-full" title="Полный экран">⛶</button>
+  <div id="feed"></div>
+  <div id="toast"></div>
+  <div id="joy"><div id="knob"></div></div>
+  <div id="joy-hint">👆 Води пальцем здесь,<br>чтобы идти</div>
+  <div id="btns">
+    <button id="b-run" class="btn small">💨<small>Бег</small></button>
+    <button id="b-sp" class="btn mid"><span>⚡</span><small id="sp-name">Спец</small></button>
+    <button id="b-atk" class="btn big"><span>⚔️</span><small id="atk-name">Удар</small></button>
+    <button id="b-ult" class="btn ult"><span>🌀</span><small id="ult-name">Ульта</small></button>
+  </div>
+  <div id="keys-hint">WASD — ходить · Shift — бег · Пробел/клик — удар (враг сзади — хвостом) · E — спец · Q — ульта · мышь — камера</div>
+</div>
+
+<!-- Меню -->
+<div id="menu">
+  <div class="panel">
+    <div class="head">
+      <h1>МЕХА<span>ЗАВРЫ</span></h1>
+      <p class="sub">Онлайн-битва робо-динозавров</p>
+    </div>
+    <input id="nick" maxlength="14" placeholder="Позывной пилота" autocomplete="off" enterkeyhint="done">
+    <div id="cards"></div>
+    <p id="desc"></p>
+    <div class="modes">
+      <button class="mode" data-m="grow">🔧 <b>Апгрейд</b><small>С прототипа до ПРАЙМА</small></button>
+      <button class="mode" data-m="prime">⚔️ <b>Прайм-арена</b><small>Все на максимуме</small></button>
+      <button class="mode" data-m="room">👥 <b>Комната</b><small>Только живые игроки</small></button>
+    </div>
+    <div id="room-box" class="hidden">
+      <span>Код комнаты</span>
+      <input id="room-code" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      <button id="room-new" title="Новый код">🎲</button>
+      <button id="room-share">📤 Позвать друзей</button>
+    </div>
+    <button id="play">В БОЙ</button>
+    <p class="tiny" id="menu-note">Без регистрации. Если никого нет онлайн, будут боты.</p>
+  </div>
+</div>
+
+<!-- Уничтожен -->
+<div id="death" class="hidden">
+  <div class="panel small">
+    <h2>💥 Мех уничтожен</h2>
+    <p id="death-by"></p>
+    <div id="death-stats"></div>
+    <button id="again">Снова в бой</button>
+    <button id="to-menu" class="ghost">Сменить меха</button>
+  </div>
+</div>
+
+<!-- Подсказка повернуть телефон -->
+<div id="rotate"><div class="phone">📱</div><p>Поверни телефон горизонтально</p></div>
+
+<noscript>Для игры нужен JavaScript.</noscript>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
