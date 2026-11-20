@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
 { "imports": {
-  "three": "./lib/three.module.min.js?v=4",
+  "three": "./lib/three.module.min.js?v=5",
   "three/addons/": "./lib/addons/"
 } }
 </script>
@@ -45,10 +45,12 @@
   <canvas id="compass"></canvas>
   <div id="topright">
     <span id="tod">☀️</span><span id="online">…</span>
+    <button id="b-invite" class="hidden" title="Позвать друзей (I)">📤</button>
     <button id="b-map" title="Карта (M)">🗺</button>
     <button id="b-full" title="Полный экран">⛶</button>
     <button id="b-menu" title="В меню">☰</button>
   </div>
+  <div id="lb" class="hidden"></div>
   <div id="fps"></div>
   <div id="toast"></div>
   <div id="joy"><div id="knob"></div></div>
@@ -78,9 +80,21 @@
     <button id="continue" class="hidden"></button>
     <div id="cards"></div>
     <div id="desc"></div>
+    <div class="modes">
+      <button class="mode" data-m="survive">🌿 <b>Выживание</b><small>Расти с детёныша</small></button>
+      <button class="mode" data-m="arena">⚔️ <b>Прайм-арена</b><small>Все взрослые, бой</small></button>
+      <button class="mode" data-m="room">👥 <b>Комната</b><small>С друзьями</small></button>
+    </div>
+    <p id="mode-note"></p>
+    <div id="room-box" class="hidden">
+      <span>Код комнаты</span>
+      <input id="room-code" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      <button id="room-new" title="Новый код">🎲</button>
+      <button id="room-share">📤 Позвать друзей</button>
+    </div>
     <div class="row">
       <input id="nick" maxlength="14" placeholder="Твоё имя" autocomplete="off" enterkeyhint="done">
-      <div class="seg"><button id="m-online">🌐 Онлайн</button><button id="m-solo">🏝 Один</button></div>
+      <div class="seg" id="net-seg"><button id="m-online">🌐 Онлайн</button><button id="m-solo">🏝 Один</button></div>
     </div>
     <button id="play">🥚 ВЫЛУПИТЬСЯ</button>
     <p class="tiny">Без регистрации. Прогресс сохраняется на этом устройстве. <a href="mech/">⚙️ Старая игра: МЕХАЗАВРЫ</a></p>
@@ -115,13 +129,13 @@ try {
   // 1) скачиваем 3D-движок с настоящим процентом (размер файла известен)
   const TOTAL = 691648;
   await window.__boot(2, 'Скачиваю 3D-движок…');
-  const r = await fetch('./lib/three.module.min.js?v=4');
+  const r = await fetch('./lib/three.module.min.js?v=5');
   if (!r.ok) throw new Error('движок: HTTP ' + r.status);
   const rd = r.body && r.body.getReader();
   if (rd) { let got = 0; for (;;) { const { done, value } = await rd.read(); if (done) break; got += value.length; window.__boot(2 + 58 * Math.min(1, got / TOTAL)); } }
   else await r.arrayBuffer();
   await window.__boot(60, 'Загружаю игру…');
-  await import('./js/game.js?v=4');
+  await import('./js/game.js?v=5');
 } catch (e) { fail((e && e.message || e) + ' | ' + (e && e.stack ? String(e.stack).split('\n').slice(0, 2).join(' ') : '') + ' | ' + navigator.userAgent.slice(0, 120)); }
 </script>
 </body>

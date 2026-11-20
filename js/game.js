@@ -1,10 +1,10 @@
 // ЭРА ЯЩЕРОВ — выживание динозавров в браузере.
 // Вылупляешься детёнышем, ищешь еду и воду, растёшь до взрослого, охотишься или спасаешься от хищников.
 import * as THREE from 'three';
-import { SPECIES, SP_KEYS, STAGES, stageOf, scaleOf, massOf, statK, buildDino, animate, setHurt } from './dinos.js?v=4';
-import { World, height, depthAt, WATER_Y, MAP_R } from './world.js?v=4';
-import { connect } from './net.js?v=4';
-import { sfx, initAudio } from './sfx.js?v=4';
+import { SPECIES, SP_KEYS, STAGES, stageOf, scaleOf, massOf, statK, buildDino, animate, setHurt } from './dinos.js?v=5';
+import { World, height, depthAt, WATER_Y, MAP_R } from './world.js?v=5';
+import { connect } from './net.js?v=5';
+import { sfx, initAudio } from './sfx.js?v=5';
 
 const $ = id => document.getElementById(id);
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -32,6 +32,13 @@ const sun = new THREE.DirectionalLight(0xfff1d6, 2.2); scene.add(sun); scene.add
 const boot = window.__boot || (async () => {});
 await boot(68, 'Строю мир: холмы, реки, леса…');
 const world = new World(scene);
+world.limit = MAP_R - 18;
+// граница арены: красная стена
+const ring = new THREE.Mesh(new THREE.CylinderGeometry(105, 105, 60, 64, 1, true), new THREE.MeshBasicMaterial({ color: 0xff5a3a, transparent: true, opacity: 0.13, side: THREE.DoubleSide, depthWrite: false }));
+ring.position.y = 20; ring.visible = false; scene.add(ring);
+let mode = localStorage.getItem('era_mode') || 'survive'; // survive | arena | room
+if (!['survive', 'arena', 'room'].includes(mode)) mode = 'survive';
+let roomCode = '';
 await boot(90, 'Готовлю динозавров…');
 function onResize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
 addEventListener('resize', onResize);
@@ -92,7 +99,7 @@ function updateParticles(dt) {
 const clientId = Math.random().toString(36).slice(2, 10);
 let uid = 0;
 const ents = new Set();
-let me = null, playing = false, net = null, roomName = '', online = true;
+let me = null, playing = false, net = null, online = true;
 
 function makeLabel(text) {
   const cv = document.createElement('canvas'); cv.width = 256; cv.height = 48;
@@ -309,7 +316,7 @@ function applyHit(t, dmg, bleed, fr, kx, kz, byName, bySp, attacker) {
   if (t.isDead) return;
   t.hp -= dmg; t.bleed = Math.min(8, t.bleed + bleed); t.fracture = Math.max(t.fracture, fr);
   t.kx += kx; t.kz += kz; t.hurtT = 0.12; t.resting = false; t.feeding = null;
-  t.lastAttacker = attacker || t.lastAttacker; t.lastHitT = NOW();
+  t.lastAttacker = attacker || t.lastAttacker; t.lastHitT = NOW(); t.lastByName = byName || '';
   if (t === me) { flashVignette(); lastHitBy = byName ? `${byName} (${SPECIES[bySp] ? SPECIES[bySp].name : ''})` : ''; if (fr) toast('🦴 Перелом! Ты хромаешь'); }
   if (Math.random() < 0.5) sfx.hurt(pitchOf(t), volAt(t));
   if (t.hp <= 0) kill(t, byName ? 'Убит: ' + byName : 'Погиб в бою');
@@ -349,6 +356,7 @@ function tickLeap(a, dt) {
 let lastHitBy = '', deathCause = '';
 function tickVitals(e, dt) {
   const sprinting = e.spd > gaitSpeeds(e)[1] * 1.05;
+  if (mode !== 'survive' && e === me) { e.food = e.water = 100; }
   const mult = e.rest > 0.5 ? 0.45 : sprinting ? 1.7 : 1;
   const ai = e.ai ? 0.6 : 1;
   e.food = Math.max(0, e.food - 100 / (11 * 60) * mult * ai * dt);
@@ -358,7 +366,7 @@ function tickVitals(e, dt) {
   if (e.food <= 0) { e.hp -= max * 0.01 * dt; cause = 'Умер от голода'; }
   if (e.water <= 0) { e.hp -= max * 0.013 * dt; cause = 'Умер от жажды'; }
   if (e.bleed > 0.02) { e.hp -= max * e.bleed * 0.006 * dt; e.bleed = Math.max(0, e.bleed - (e.rest > 0.5 ? 0.35 : 0.08) * dt); cause = cause || 'Истёк кровью'; if (Math.random() < dt * e.bleed * 0.8) burst(e.x, e.y + 0.3, e.z, 1, '#8a0f14', 0.4, 0.5); }
-  if (e.food > 35 && e.water > 35 && e.bleed < 0.05) e.hp = Math.min(max, e.hp + max * (e.rest > 0.5 ? 0.022 : 0.004) * dt);
+  if (e.food > 35 && e.water > 35 && e.bleed < 0.05 && !(mode !== 'survive' && e === me && e.rest < 0.5)) e.hp = Math.min(max, e.hp + max * (e.rest > 0.5 ? 0.022 : 0.004) * dt);
   e.fracture = Math.max(0, e.fracture - dt * (e.rest > 0.5 ? 2 : 1));
   // рост — только если сыт и напоён
   if (e.food > 25 && e.water > 25 && e.g < 1) {
@@ -375,10 +383,11 @@ function kill(t, cause) {
   t.isDead = true; t.hp = 0; t.spd = 0; t.act = null; t.charge = 0; t.leap = null; t.feeding = null; t.resting = false;
   sfx.hurt(pitchOf(t) * 0.8, volAt(t));
   const c = makeCarcass(t);
+  if (t !== me && me && !me.isDead && t.lastAttacker === me && !t.remote) { me.kills = (me.kills || 0) + 1; if (mode !== 'survive') toast(`⚔️ Победа! Всего: ${me.kills}`); }
   if (t === me) {
     deathCause = cause;
     try { localStorage.removeItem('era_save'); } catch (e) { /* нет хранилища */ }
-    if (net) net.kill({ x: t.x, z: t.z, sp: t.sp, g: t.g, yaw: t.yaw });
+    if (net) net.kill({ x: t.x, z: t.z, sp: t.sp, g: t.g, yaw: t.yaw, by: NOW() - t.lastHitT < 15000 ? String(t.lastByName || '') : '' });
     setTimeout(showDeath, 2600);
   }
   return c;
@@ -462,9 +471,10 @@ function doCall(e) {
 const packSize = () => { let n = 0; for (const b of ents) if (b.ai && !b.isDead && b.leader === me) n++; return n; };
 
 // ================= ИИ =================
-const AI_MAX = isMobile ? 16 : 22;
+const aiMax = () => (mode === 'room' ? 0 : mode === 'arena' ? (isMobile ? 8 : 12) : isMobile ? 16 : 22);
 const AI_W = { dryo: 5, trike: 3, stego: 2, deino: 3, carno: 2, rex: 1 };
-function pickSpecies() { let s = 0; for (const k in AI_W) s += AI_W[k]; let r = Math.random() * s; for (const k in AI_W) { if ((r -= AI_W[k]) <= 0) return k; } return 'dryo'; }
+const AI_WA = { dryo: 2, trike: 3, stego: 3, deino: 3, carno: 3, rex: 2 };
+function pickSpecies() { const W = mode === 'survive' ? AI_W : AI_WA; let s = 0; for (const k in W) s += W[k]; let r = Math.random() * s; for (const k in W) { if ((r -= W[k]) <= 0) return k; } return 'dryo'; }
 function spawnGroup(force) {
   const sp = pickSpecies(), n = sp === 'dryo' || sp === 'deino' || sp === 'trike' ? 1 + Math.floor(Math.random() * 3) : 1;
   const c = me || { x: 0, z: 0 };
@@ -472,12 +482,13 @@ function spawnGroup(force) {
   for (let t = 0; t < 30; t++) {
     const a = Math.random() * TAU, r = force ? 45 + Math.random() * 110 : 80 + Math.random() * 110;
     x = c.x + Math.cos(a) * r; z = c.z + Math.sin(a) * r;
-    if (Math.hypot(x, z) < MAP_R - 35 && height(x, z) > WATER_Y + 0.8) break;
+    if (Math.hypot(x, z) < world.limit - 17 && height(x, z) > WATER_Y + 0.8) break;
+    if (t === 29) { x = (Math.random() - 0.5) * 40; z = (Math.random() - 0.5) * 40; }
   }
   let lead = null;
   for (let i = 0; i < n; i++) {
-    const g = lead ? cl(lead.g - Math.random() * 0.5, 0.15, 1) : 0.25 + Math.random() * 0.8;
-    const b = new Dino(sp, { ai: true, g: Math.min(1, g), x: x + (Math.random() - 0.5) * 8, z: z + (Math.random() - 0.5) * 8, yaw: Math.random() * TAU, food: 40 + Math.random() * 60 });
+    const g = mode !== 'survive' ? 1 : lead ? cl(lead.g - Math.random() * 0.5, 0.15, 1) : 0.25 + Math.random() * 0.8;
+    const b = new Dino(sp, { ai: true, g: Math.min(1, g), x: x + (Math.random() - 0.5) * 8, z: z + (Math.random() - 0.5) * 8, yaw: Math.random() * TAU, food: mode !== 'survive' ? 25 + Math.random() * 25 : 40 + Math.random() * 60 });
     b.state = 'wander'; b.think = Math.random(); b.goal = null;
     if (lead) b.leader = lead; else lead = b;
   }
@@ -492,12 +503,12 @@ function manageAI(dt) {
     if (me && dist(b, me) > 240 && b.leader !== me) { b.dispose(); continue; }
     n++;
   }
-  if (n < AI_MAX) spawnGroup(n < AI_MAX / 2);
+  if (n < aiMax()) spawnGroup(n < aiMax() / 2);
 }
 function randGoal(b, R) {
   for (let t = 0; t < 12; t++) {
     const a = Math.random() * TAU, r = R * (0.4 + Math.random() * 0.6), x = b.x + Math.cos(a) * r, z = b.z + Math.sin(a) * r;
-    if (Math.hypot(x, z) < MAP_R - 35 && depthAt(x, z) < b.m.hip * b.scale * 0.7) return [x, z];
+    if (Math.hypot(x, z) < world.limit - 17 && depthAt(x, z) < b.m.hip * b.scale * 0.7) return [x, z];
   }
   return [b.x * 0.9, b.z * 0.9];
 }
@@ -513,7 +524,7 @@ function thinkAI(b) {
     if (e.S.diet === 'carn' && em > M * 0.45 && (S.diet === 'herb' || em > M * 1.6) && d < td) { threat = e; td = d; }
     const edible = em >= M * 0.04 && (e.S.diet === 'herb' ? em <= M * 1.25 : b.food < 45 && em <= M * 0.8);
     if (S.diet === 'carn' && b.food < 80 && edible) {
-      if (e === me && NOW() - lifeStart < 40000) continue; // дадим детёнышу освоиться
+      if (e === me && mode === 'survive' && NOW() - lifeStart < 40000) continue; // дадим детёнышу освоиться
       const w = d * (e === me ? 0.85 : 1); if (w < pd) { prey = e; pd = w; }
     }
   }
@@ -531,7 +542,7 @@ function thinkAI(b) {
     b.state = 'flee'; b.target = threat;
     const ax = b.x - threat.x, az = b.z - threat.z, d = Math.hypot(ax, az) || 1;
     b.goal = [b.x + ax / d * 40, b.z + az / d * 40];
-    if (Math.hypot(b.goal[0], b.goal[1]) > MAP_R - 40) b.goal = [b.goal[0] * 0.6, b.goal[1] * 0.6];
+    if (Math.hypot(b.goal[0], b.goal[1]) > world.limit - 22) b.goal = [b.goal[0] * 0.6, b.goal[1] * 0.6];
     return;
   }
   if (prey && b.leader !== me) { b.target = prey; b.state = 'hunt'; return; }
@@ -616,7 +627,7 @@ const handlers = {
     }
     r.peer = peerId; r.lastSeen = NOW();
     r.tx = +d.x || 0; r.tz = +d.z || 0; r.tyaw = +d.r || 0; r.g = cl(+d.g || 0); r.tspd = +d.v || 0;
-    r.hp = cl(+d.h || 0) * r.maxHP(); r.resting = !!d.rs; r.swim = !!d.sw;
+    r.kills = +d.k || 0; r.hp = cl(+d.h || 0) * r.maxHP(); r.resting = !!d.rs; r.swim = !!d.sw;
     if (d.a && ACT_NAME[d.a] && (!r.act || r.act.k !== ACT_NAME[d.a] || d.at < r.act.t)) {
       const k = ACT_NAME[d.a]; r.act = { k, t: +d.at || 0, d: k === 'eat' || k === 'drink' ? 9999 : k === 'call' ? 1.6 : 0.8, side: d.sd || 1, done: true };
     } else if (!d.a && r.act && (r.act.k === 'eat' || r.act.k === 'drink')) r.act.d = r.act.t + 0.3;
@@ -627,16 +638,21 @@ const handlers = {
     applyHit(me, cl(+d.d, 0, 5000), cl(+d.b, 0, 10), cl(+d.f, 0, 10), cl(+d.kx, -40, 40), cl(+d.kz, -40, 40), String(d.by || '').slice(0, 16), d.bs, by);
   },
   onKill(d, peerId) {
+    if (me && !me.isDead && d && d.by && d.by === myName) { me.kills = (me.kills || 0) + 1; toast(`⚔️ Победа! Всего: ${me.kills}`); }
     for (const [c, r] of remotes) if (r.peer === peerId) { remotes.delete(c); r.x = +d.x; r.z = +d.z; r.yaw = +d.yaw || r.yaw; kill(r, ''); }
   },
   onCall(d) { if (!me || !d || !SPECIES[d.sp]) return; calls.push({ x: +d.x, z: +d.z, sp: d.sp, t: NOW(), friend: d.sp === me.sp }); sfx.call(SPECIES[d.sp].call, Math.max(0.15, 1 - Math.hypot(me.x - d.x, me.z - d.z) / 200)); },
   onLeave(peerId) { peers.delete(peerId); for (const [c, r] of remotes) if (r.peer === peerId) { r.dispose(); remotes.delete(c); } },
 };
+const netRoomName = () => (mode === 'arena' ? 'arena' : mode === 'room' ? 'r-' + roomCode : 'world');
+function leaveNet() { if (net) { try { net.leave(); } catch (e) { /* ок */ } net = null; } for (const r of remotes.values()) r.dispose(); remotes.clear(); peers.clear(); }
 async function startNet() {
-  if (net || !online) return;
+  const want = netRoomName();
+  if (net && net.room !== want) leaveNet();
+  if (net) return;
   setNet('…');
-  try { net = await connect(roomName, handlers); } catch (e) { net = null; }
-  setNet(net ? '🌐 1' : '🏝 офлайн');
+  try { net = await connect(want, handlers); } catch (e) { net = null; }
+  setNet(net ? '🌐 1' : '🏝 нет связи');
 }
 function setNet(t) { $('online').textContent = t; }
 function sendState() {
@@ -644,7 +660,7 @@ function sendState() {
   const a = me.act;
   net.state({ c: clientId, n: myName, s: me.sp, g: Math.round(me.g * 1000) / 1000, x: Math.round(me.x * 10) / 10, z: Math.round(me.z * 10) / 10,
     r: Math.round(me.yaw * 100) / 100, v: Math.round(me.spd * 10) / 10, h: Math.round(me.hp / me.maxHP() * 100) / 100,
-    rs: me.resting ? 1 : 0, sw: me.swim ? 1 : 0, a: a ? ACT_CODE[a.k] || 0 : 0, at: a ? Math.round(a.t * 10) / 10 : 0, sd: a ? a.side : 0, dead: me.isDead ? 1 : 0 });
+    rs: me.resting ? 1 : 0, sw: me.swim ? 1 : 0, k: me.kills | 0, a: a ? ACT_CODE[a.k] || 0 : 0, at: a ? Math.round(a.t * 10) / 10 : 0, sd: a ? a.side : 0, dead: me.isDead ? 1 : 0 });
 }
 function updateRemote(r, dt) {
   if (NOW() - r.lastSeen > 6000) { r.dispose(); for (const [c, x] of remotes) if (x === r) remotes.delete(c); return; }
@@ -671,6 +687,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyQ') doCall(me);
   if (e.code === 'KeyC') toggleRest();
   if (e.code === 'KeyM') toggleMap();
+  if (e.code === 'KeyI' && mode === 'room') invite();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -727,6 +744,7 @@ $('b-map').addEventListener('pointerdown', e => { e.stopPropagation(); toggleMap
 $('map').addEventListener('pointerdown', e => { e.stopPropagation(); toggleMap(); });
 
 function toggleFeed() {
+  if (mode !== 'survive') return;
   if (me.feeding) { stopFeeding(me, ''); return; }
   const F = feedTarget(me);
   if (!F) { toast(me.S.diet === 'carn' ? 'Рядом нет туши или воды. Нюхай 👃' : 'Рядом нет растений или воды. Нюхай 👃'); return; }
@@ -833,6 +851,14 @@ function updateCamera(dt) {
 }
 
 // ================= Интерфейс =================
+function drawLB() {
+  const box = $('lb');
+  const list = [{ n: me.name, k: me.kills | 0, me: 1 }, ...[...remotes.values()].map(r => ({ n: r.name, k: r.kills | 0 }))];
+  if (mode === 'survive' && list.length < 2) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  list.sort((a, b) => b.k - a.k);
+  box.innerHTML = '<b>🏆 Победы</b>' + list.slice(0, 6).map(o => `<div class="${o.me ? 'me' : ''}">${esc(o.n)} <span>${o.k}</span></div>`).join('');
+}
 function toast(t) { const el = $('toast'); el.textContent = t; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); }
 function flashVignette() { const v = $('vignette'); v.classList.remove('hit'); void v.offsetWidth; v.classList.add('hit'); }
 const setBar = (id, v) => { $(id).style.transform = `scaleX(${cl(v / 100)})`; };
@@ -855,7 +881,7 @@ function updateHud() {
   const ps = packSize(); if (ps) st2.push(`🤝 Стая: ${ps}`);
   $('status').textContent = st2.join(' · ');
   // кнопка «Есть/Пить» появляется рядом с едой или водой
-  const F = me.feeding || feedTarget(me);
+  const F = mode !== 'survive' ? null : me.feeding || feedTarget(me);
   feedHint = F;
   const fb = $('b-feed');
   fb.classList.toggle('hidden', !F);
@@ -865,7 +891,9 @@ function updateHud() {
   $('sp-cd').textContent = me.scd > 0 ? Math.ceil(me.scd) : '';
   $('b-smell').classList.toggle('cd', NOW() < smellCd);
   const np = [...peers.values()].filter(t => NOW() - t < 5000).length;
-  if (net) setNet(`🌐 ${np + 1}`);
+  if (net) setNet(`${mode === 'room' ? '👥 ' + roomCode : '🌐'} · ${np + 1}`);
+  else if (online || mode === 'room') setNet('🏝 нет связи');
+  drawLB();
 }
 // Компас сверху: стороны света, зовы и запахи
 const cmp = $('compass'), cctx = cmp.getContext('2d');
@@ -937,8 +965,19 @@ if (!document.documentElement.requestFullscreen) $('b-full').classList.add('hidd
 let chosen = localStorage.getItem('era_sp') || 'dryo';
 if (!SPECIES[chosen]) chosen = 'dryo';
 online = localStorage.getItem('era_online') !== '0';
-roomName = (new URLSearchParams(location.search).get('room') || 'world').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'WORLD';
+const cleanCode = v => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+const newCode = () => { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let c = ''; for (let i = 0; i < 4; i++) c += A[Math.floor(Math.random() * A.length)]; return c; };
+roomCode = cleanCode(localStorage.getItem('era_room')) || newCode();
+{ // пришёл по ссылке-приглашению
+  const c = cleanCode(new URLSearchParams(location.search).get('room'));
+  if (c.length >= 3) { mode = 'room'; roomCode = c; setTimeout(() => toast(`Тебя позвали в комнату ${c}`), 800); }
+}
 $('nick').value = localStorage.getItem('era_nick') || '';
+const MODE_NOTE = {
+  survive: 'Вылупись детёнышем, ищи еду и воду, расти. Большой мир, дикие динозавры.',
+  arena: 'Все сразу взрослые, без голода. Только бой на арене — с другими игроками и ботами. Если людей нет, арену заполнят боты.',
+  room: 'Только живые игроки, без ботов. Отправь код или ссылку друзьям — и сразитесь на арене.',
+};
 const PREVIEW_AT = (() => { for (let r = 30; r < 200; r += 7) for (let a = 0; a < 16; a++) { const x = 95 + Math.cos(a) * r * 0.4, z = -105 + Math.sin(a) * r * 0.4 + 40; if (height(x, z) > WATER_Y + 0.8 && height(x, z) < 6) return [x, z]; } return [60, -40]; })();
 function setPreview(sp) {
   if (preview) preview.dispose();
@@ -958,13 +997,33 @@ function renderCards() {
     ${bar('Здоровье', S.hp / 1600)}${bar('Сила', S.dmg / 210)}${bar('Скорость', S.sprint / 13.5)}${bar('Рост', 8 / S.grow)}
     <p class="sp">⚔️ ${S.atk} · ⚡ ${S.spec}: ${S.specInfo}</p>`;
   for (const b of document.querySelectorAll('.card')) b.onclick = () => { chosen = b.dataset.k; localStorage.setItem('era_sp', chosen); renderCards(); setPreview(chosen); };
+  for (const b of document.querySelectorAll('.mode')) b.classList.toggle('sel', b.dataset.m === mode);
+  $('mode-note').textContent = MODE_NOTE[mode];
+  $('room-box').classList.toggle('hidden', mode !== 'room');
+  $('room-code').value = roomCode;
+  $('net-seg').classList.toggle('hidden', mode === 'room');
   $('m-online').classList.toggle('on', online); $('m-solo').classList.toggle('on', !online);
-  const save = loadSave();
+  $('play').textContent = mode === 'survive' ? '🥚 ВЫЛУПИТЬСЯ' : '⚔️ В БОЙ';
+  const save = mode === 'survive' ? loadSave() : null;
   $('continue').classList.toggle('hidden', !save);
   if (save) $('continue').innerHTML = `▶ Продолжить: ${SPECIES[save.sp].emoji} ${SPECIES[save.sp].name} · ${STAGES[stageOf(save.g)]} ${Math.floor(save.g * 100)}%`;
 }
+for (const b of document.querySelectorAll('.mode')) b.onclick = () => { mode = b.dataset.m; localStorage.setItem('era_mode', mode); renderCards(); };
 $('m-online').onclick = () => { online = true; localStorage.setItem('era_online', '1'); renderCards(); };
 $('m-solo').onclick = () => { online = false; localStorage.setItem('era_online', '0'); renderCards(); };
+$('room-code').addEventListener('input', e => { const c = cleanCode(e.target.value); if (e.target.value !== c) e.target.value = c; roomCode = c; localStorage.setItem('era_room', c); });
+$('room-new').onclick = () => { roomCode = newCode(); localStorage.setItem('era_room', roomCode); $('room-code').value = roomCode; };
+const inviteLink = code => location.origin + location.pathname + '?room=' + code;
+async function invite() {
+  if (roomCode.length < 3) { roomCode = newCode(); $('room-code').value = roomCode; }
+  localStorage.setItem('era_room', roomCode);
+  const url = inviteLink(roomCode), text = `Го в ЭРУ ЯЩЕРОВ! Моя комната ${roomCode}`;
+  try { if (navigator.share) { await navigator.share({ title: 'ЭРА ЯЩЕРОВ', text, url }); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(url); toast('Ссылка скопирована — отправь другу'); return; } catch (e) { /* нет доступа к буферу */ }
+  window.prompt('Скопируй ссылку и отправь другу:', url);
+}
+$('room-share').onclick = invite;
+$('b-invite').addEventListener('pointerdown', e => { e.stopPropagation(); invite(); });
 $('play').onclick = () => startGame(null);
 $('continue').onclick = () => startGame(loadSave());
 $('again').onclick = () => { $('death').classList.add('hidden'); startGame(null); };
@@ -973,18 +1032,20 @@ $('b-menu').addEventListener('pointerdown', e => { e.stopPropagation(); if (me &
 
 function loadSave() { try { const s = JSON.parse(localStorage.getItem('era_save')); return s && SPECIES[s.sp] ? s : null; } catch (e) { return null; } }
 function save() {
-  if (!me || me.isDead) return;
+  if (!me || me.isDead || mode !== 'survive') return;
   try { localStorage.setItem('era_save', JSON.stringify({ sp: me.sp, g: me.g, hp: me.hp / me.maxHP(), food: me.food, water: me.water, x: me.x, z: me.z, yaw: me.yaw, t: Date.now() })); } catch (e) { /* нет хранилища */ }
 }
 addEventListener('pagehide', save);
 document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
 
 function spawnPoint() {
-  for (let t = 0; t < 80; t++) {
-    const a = Math.random() * TAU, r = Math.sqrt(Math.random()) * (MAP_R - 50), x = Math.cos(a) * r, z = Math.sin(a) * r;
+  const arena = mode !== 'survive';
+  for (let t = 0; t < 120; t++) {
+    const a = Math.random() * TAU, r = Math.sqrt(Math.random()) * (world.limit - 32), x = Math.cos(a) * r, z = Math.sin(a) * r;
     if (height(x, z) < WATER_Y + 1 || height(x, z) > 10) continue;
-    if (!world.findWater(x, z, 70)) continue; // рядом с водой — у детёныша есть шанс
-    let ok = true; for (const e of ents) if (e.S.diet === 'carn' && e.mass > 300 && Math.hypot(e.x - x, e.z - z) < 60) ok = false;
+    if (!arena && !world.findWater(x, z, 70)) continue; // у детёныша рядом вода
+    let ok = true;
+    for (const e of ents) if ((arena || (e.S.diet === 'carn' && e.mass > 300)) && Math.hypot(e.x - x, e.z - z) < (arena ? 35 : 60)) ok = false;
     if (ok) return [x, z];
   }
   return [0, 0];
@@ -993,26 +1054,34 @@ function startGame(sv) {
   initAudio();
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   goLandscape();
+  if (sv) mode = 'survive';
+  if (mode === 'room' && roomCode.length < 3) { roomCode = newCode(); }
+  const arena = mode !== 'survive';
   myName = ($('nick').value.trim() || 'Ящер' + Math.floor(Math.random() * 900 + 100)).slice(0, 14);
-  localStorage.setItem('era_nick', $('nick').value.trim());
+  localStorage.setItem('era_nick', $('nick').value.trim()); localStorage.setItem('era_mode', mode); localStorage.setItem('era_room', roomCode);
   if (me) { if (!me.isDead) me.dispose(); me = null; }
   if (preview) { preview.dispose(); preview = null; }
+  for (const e of [...ents]) if (e.ai) e.dispose();
+  world.limit = arena ? 105 : MAP_R - 18; ring.visible = arena;
+  document.body.classList.toggle('arena', arena);
+  const wantNet = online || mode === 'room';
+  if (net && (!wantNet || net.room !== netRoomName())) leaveNet();
   const sp = sv ? sv.sp : chosen;
   const [x, z] = sv ? [sv.x, sv.z] : spawnPoint();
-  me = new Dino(sp, { g: sv ? sv.g : 0, x, z, yaw: sv ? sv.yaw : Math.random() * TAU, food: sv ? sv.food : 80, water: sv ? sv.water : 80, name: myName });
-  me.name = myName;
+  me = new Dino(sp, { g: arena ? 1 : sv ? sv.g : 0, x, z, yaw: sv ? sv.yaw : Math.random() * TAU, food: sv ? sv.food : 80, water: sv ? sv.water : 80, name: myName });
+  me.name = myName; me.kills = 0;
   if (sv) me.hp = cl(sv.hp, 0.1, 1) * me.maxHP();
   camYaw = me.yaw; camPitch = 0.3;
-  // в начале мира есть немного жизни вокруг
-  for (let i = 0; i < 5; i++) spawnGroup(true);
+  if (mode !== 'room') for (let i = 0; i < (arena ? 4 : 5); i++) spawnGroup(true);
   playing = true; lifeStart = NOW(); document.body.classList.add('playing');
   $('atk-name').textContent = me.S.atk; $('sp-name').textContent = me.S.spec;
   $('b-atk').querySelector('span').textContent = { rex: '🦷', carno: '🦷', deino: '🗡️', trike: '🔱', stego: '🌵', dryo: '🦶' }[me.sp];
-  $('menu').classList.add('hidden'); $('hud').classList.remove('hidden');
+  $('b-invite').classList.toggle('hidden', mode !== 'room');
+  $('hud').classList.remove('hidden'); $('menu').classList.add('hidden');
   marks.length = 0; calls.length = 0;
-  if (online) startNet(); else { if (net) { net.leave(); net = null; } setNet('🏝 Один'); }
-  toast(sv ? 'С возвращением!' : `Ты вылупился! Найди воду 💧 и еду ${me.S.diet === 'carn' ? '🍖' : '🌿'}`);
-  setTimeout(() => { if (me && !me.isDead && !sv) toast('👃 Нюхай, чтобы найти воду и еду. Ешь и пей — так растёшь'); }, 4500);
+  if (wantNet) startNet(); else setNet('🏝 Один');
+  toast(sv ? 'С возвращением!' : arena ? (mode === 'room' ? `👥 Комната ${roomCode}: жди друзей и дерись` : '⚔️ Арена! Побеждай других') : `Ты вылупился! Найди воду 💧 и еду ${me.S.diet === 'carn' ? '🍖' : '🌿'}`);
+  if (mode === 'survive') setTimeout(() => { if (me && !me.isDead && !sv) toast('👃 Нюхай, чтобы найти воду и еду. Ешь и пей — так растёшь'); }, 4500);
 }
 let lifeStart = 0;
 function showDeath() {
@@ -1020,7 +1089,7 @@ function showDeath() {
   playing = false; document.body.classList.remove('playing');
   const mins = Math.floor((NOW() - lifeStart) / 60000), secs = Math.floor((NOW() - lifeStart) / 1000) % 60;
   $('death-by').textContent = deathCause;
-  $('death-stats').innerHTML = `Прожил: <b>${mins} мин ${secs} с</b><br>Достиг: <b>${STAGES[stageOf(me.g)]}</b> (${Math.floor(me.g * 100)}%)`;
+  $('death-stats').innerHTML = mode === 'survive' ? `Прожил: <b>${mins} мин ${secs} с</b><br>Достиг: <b>${STAGES[stageOf(me.g)]}</b> (${Math.floor(me.g * 100)}%)` : `Прожил: <b>${mins} мин ${secs} с</b><br>Побед: <b>${me.kills | 0}</b>`;
   $('hud').classList.add('hidden'); $('death').classList.remove('hidden');
   me = null;
 }
@@ -1029,6 +1098,8 @@ function toMenu() {
   if (me && !me.isDead) me.dispose();
   me = null;
   for (const e of [...ents]) if (e.ai) e.dispose();
+  ring.visible = false; world.limit = MAP_R - 18; document.body.classList.remove('arena');
+  leaveNet();
   $('hud').classList.add('hidden'); $('menu').classList.remove('hidden');
   setPreview(chosen); renderCards();
 }

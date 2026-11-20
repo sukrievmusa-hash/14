@@ -265,8 +265,8 @@ export class World {
         if (d < m && d > 0.001) { p.x = t.x + dx / d * m; p.z = t.z + dz / d * m; }
       }
     }
-    const d = Math.hypot(p.x, p.z);
-    if (d > MAP_R - 18) { p.x *= (MAP_R - 18) / d; p.z *= (MAP_R - 18) / d; }
+    const d = Math.hypot(p.x, p.z), L = this.limit || MAP_R - 18;
+    if (d > L) { p.x *= L / d; p.z *= L / d; }
   }
 
   // Прячем деревья между камерой и игроком
