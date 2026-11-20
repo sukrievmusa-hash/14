@@ -1,10 +1,10 @@
 // ЭРА ЯЩЕРОВ — выживание динозавров в браузере.
 // Вылупляешься детёнышем, ищешь еду и воду, растёшь до взрослого, охотишься или спасаешься от хищников.
 import * as THREE from 'three';
-import { SPECIES, SP_KEYS, STAGES, stageOf, scaleOf, massOf, statK, buildDino, animate, setHurt } from './dinos.js';
-import { World, height, depthAt, WATER_Y, MAP_R } from './world.js';
-import { connect } from './net.js';
-import { sfx, initAudio } from './sfx.js';
+import { SPECIES, SP_KEYS, STAGES, stageOf, scaleOf, massOf, statK, buildDino, animate, setHurt } from './dinos.js?v=4';
+import { World, height, depthAt, WATER_Y, MAP_R } from './world.js?v=4';
+import { connect } from './net.js?v=4';
+import { sfx, initAudio } from './sfx.js?v=4';
 
 const $ = id => document.getElementById(id);
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;

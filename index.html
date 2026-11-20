@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
 { "imports": {
-  "three": "./lib/three.module.min.js?v=3",
+  "three": "./lib/three.module.min.js?v=4",
   "three/addons/": "./lib/addons/"
 } }
 </script>
@@ -115,13 +115,13 @@ try {
   // 1) скачиваем 3D-движок с настоящим процентом (размер файла известен)
   const TOTAL = 691648;
   await window.__boot(2, 'Скачиваю 3D-движок…');
-  const r = await fetch('./lib/three.module.min.js?v=3');
+  const r = await fetch('./lib/three.module.min.js?v=4');
   if (!r.ok) throw new Error('движок: HTTP ' + r.status);
   const rd = r.body && r.body.getReader();
   if (rd) { let got = 0; for (;;) { const { done, value } = await rd.read(); if (done) break; got += value.length; window.__boot(2 + 58 * Math.min(1, got / TOTAL)); } }
   else await r.arrayBuffer();
   await window.__boot(60, 'Загружаю игру…');
-  await import('./js/game.js?v=3');
+  await import('./js/game.js?v=4');
 } catch (e) { fail((e && e.message || e) + ' | ' + (e && e.stack ? String(e.stack).split('\n').slice(0, 2).join(' ') : '') + ' | ' + navigator.userAgent.slice(0, 120)); }
 </script>
 </body>
