@@ -108,7 +108,7 @@ window.__boot = async (p, t) => {
   await new Promise(r => setTimeout(r, 30)); // даём экрану перерисоваться
 };
 const fail = m => { const e = $('lerr'); e.classList.remove('hidden'); e.innerHTML = 'Ошибка загрузки: <b></b><br>Обнови страницу. Если не помогло — пришли этот текст разработчику.'; e.querySelector('b').textContent = String(m).slice(0, 300); };
-window.addEventListener('error', e => fail(e.message || 'неизвестная ошибка'));
+window.addEventListener('error', e => fail((e.message || 'неизвестная ошибка') + (e.filename ? ' [' + String(e.filename).split('/').slice(-2).join('/') + ':' + e.lineno + ':' + e.colno + ']' : '')));
 window.addEventListener('unhandledrejection', e => fail((e.reason && e.reason.message) || e.reason));
 setTimeout(() => { if (!document.body.classList.contains('ready')) $('ltxt').textContent += ' (медленный интернет, подожди)'; }, 15000);
 try {
@@ -122,7 +122,7 @@ try {
   else await r.arrayBuffer();
   await window.__boot(60, 'Загружаю игру…');
   await import('./js/game.js?v=3');
-} catch (e) { fail(e && e.message || e); }
+} catch (e) { fail((e && e.message || e) + ' | ' + (e && e.stack ? String(e.stack).split('\n').slice(0, 2).join(' ') : '') + ' | ' + navigator.userAgent.slice(0, 120)); }
 </script>
 </body>
 </html>
