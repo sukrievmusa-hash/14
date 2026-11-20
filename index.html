@@ -13,8 +13,8 @@
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
 { "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  "three": "./lib/three.module.min.js?v=3",
+  "three/addons/": "./lib/addons/"
 } }
 </script>
 </head>
@@ -25,7 +25,10 @@
 <div id="smell-fx"></div>
 <div id="marks"></div>
 
-<div id="loading"><div class="logo">ЭРА <span>ЯЩЕРОВ</span></div><div class="spin"></div><p>Загрузка мира…</p></div>
+<div id="loading"><div class="logo">ЭРА <span>ЯЩЕРОВ</span></div>
+  <div class="lbar"><div id="lfill"></div></div>
+  <div id="lpct">0%</div><p id="ltxt">Начинаю загрузку…</p>
+  <p id="lerr" class="hidden"></p></div>
 
 <!-- Игровой интерфейс -->
 <div id="hud" class="hidden">
@@ -97,6 +100,29 @@
 
 <div id="rotate"><div class="phone">📱</div><p>Поверни телефон горизонтально</p></div>
 <noscript>Для игры нужен JavaScript.</noscript>
-<script type="module" src="js/game.js"></script>
+<script type="module">
+const $ = id => document.getElementById(id);
+let shown = 0;
+window.__boot = async (p, t) => {
+  shown = Math.max(shown, p); $('lfill').style.width = shown + '%'; $('lpct').textContent = Math.round(shown) + '%'; if (t) $('ltxt').textContent = t;
+  await new Promise(r => setTimeout(r, 30)); // даём экрану перерисоваться
+};
+const fail = m => { const e = $('lerr'); e.classList.remove('hidden'); e.innerHTML = 'Ошибка загрузки: <b></b><br>Обнови страницу. Если не помогло — пришли этот текст разработчику.'; e.querySelector('b').textContent = String(m).slice(0, 300); };
+window.addEventListener('error', e => fail(e.message || 'неизвестная ошибка'));
+window.addEventListener('unhandledrejection', e => fail((e.reason && e.reason.message) || e.reason));
+setTimeout(() => { if (!document.body.classList.contains('ready')) $('ltxt').textContent += ' (медленный интернет, подожди)'; }, 15000);
+try {
+  // 1) скачиваем 3D-движок с настоящим процентом (размер файла известен)
+  const TOTAL = 691648;
+  await window.__boot(2, 'Скачиваю 3D-движок…');
+  const r = await fetch('./lib/three.module.min.js?v=3');
+  if (!r.ok) throw new Error('движок: HTTP ' + r.status);
+  const rd = r.body && r.body.getReader();
+  if (rd) { let got = 0; for (;;) { const { done, value } = await rd.read(); if (done) break; got += value.length; window.__boot(2 + 58 * Math.min(1, got / TOTAL)); } }
+  else await r.arrayBuffer();
+  await window.__boot(60, 'Загружаю игру…');
+  await import('./js/game.js?v=3');
+} catch (e) { fail(e && e.message || e); }
+</script>
 </body>
 </html>

@@ -11,7 +11,12 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1712; f
 .logo { font-size: 34px; } .logo span, h1 span { color: var(--acc); }
 .spin { width: 38px; height: 38px; border: 4px solid rgba(255,255,255,.15); border-top-color: var(--acc); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-#loading p { opacity: .6; font-size: 13px; }
+#loading p { opacity: .7; font-size: 13px; text-align: center; padding: 0 16px; }
+.lbar { width: min(320px, 70vw); height: 12px; border-radius: 8px; background: rgba(255,255,255,.12); overflow: hidden; border: 1px solid rgba(255,255,255,.2); }
+#lfill { height: 100%; width: 0; background: linear-gradient(90deg, #7fc35a, #f2b84b); transition: width .15s; }
+#lpct { font-weight: 900; font-size: 22px; color: var(--acc); }
+#lerr { color: #ff9a8a; opacity: 1 !important; max-width: 80vw; }
+#lerr b { color: #fff; word-break: break-word; }
 
 /* ---------- HUD ---------- */
 #hud { position: fixed; inset: 0; z-index: 2; pointer-events: none; }

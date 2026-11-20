@@ -29,7 +29,10 @@ scene.fog = new THREE.Fog(0x9fd4f0, 70, 190);
 const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.2, 200);
 const hemi = new THREE.HemisphereLight(0xdcefff, 0x55603a, 1.1); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff1d6, 2.2); scene.add(sun); scene.add(sun.target);
+const boot = window.__boot || (async () => {});
+await boot(68, 'Строю мир: холмы, реки, леса…');
 const world = new World(scene);
+await boot(90, 'Готовлю динозавров…');
 function onResize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
 addEventListener('resize', onResize);
 addEventListener('orientationchange', () => setTimeout(onResize, 300));
@@ -1096,6 +1099,8 @@ function separate() {
 }
 
 setPreview(chosen); renderCards(); updateSky();
+await boot(100, 'Готово!');
+document.body.classList.add('ready');
 $('loading').classList.add('hidden');
 requestAnimationFrame(frame);
 // для отладки
